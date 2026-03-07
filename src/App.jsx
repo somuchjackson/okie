@@ -483,7 +483,7 @@ function ProfilePage({user, onBack, onSave}){
   const[saving,setSaving]=useState(false);
   const[saved,setSaved]=useState(false);
   const[err,setErr]=useState("");
-  const fileRef=React.useRef();
+  const fileRef=useRef();
 
   const isIncomplete=!user?.first_name||!user?.last_name||!user?.grad_year;
   const displayName=firstName||username||user?.username||"?";
