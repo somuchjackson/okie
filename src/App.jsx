@@ -116,8 +116,22 @@ async function sbUpdateProfile(userId, updates){
     grad_year: updates.grad_year?parseInt(updates.grad_year):null,
     username: updates.username,
     display_name: updates.username,
+    ...(updates.avatar_url!==undefined?{avatar_url:updates.avatar_url}:{}),
   }).eq("id",userId);
   if(error) throw error;
+}
+
+async function sbUploadAvatar(userId, file){
+  const sb=getSB(); if(!sb) throw new Error("Not connected");
+  const ext=file.name.split('.').pop();
+  const path=`avatars/${userId}.${ext}`;
+  const {error:upErr}=await sb.storage.from("avatars").upload(path,file,{upsert:true,contentType:file.type});
+  if(upErr) throw upErr;
+  const {data}=sb.storage.from("avatars").getPublicUrl(path);
+  const publicUrl=data.publicUrl+"?t="+Date.now(); // cache-bust
+  const {error:dbErr}=await sb.from("profiles").update({avatar_url:publicUrl}).eq("id",userId);
+  if(dbErr) throw dbErr;
+  return publicUrl;
 }
 
 async function sbGetAllMembers(){ const sb=getSB(); if(!sb) return []; const {data}=await sb.from("profiles").select("username,first_name,last_name,grad_year,created_at").order("grad_year",{ascending:true}); return data||[]; }
@@ -363,9 +377,11 @@ function PlayerPanel({player,bid,made,isDealer,isTurn,teamCol,score,cardCount,po
       {/* Avatar */}
       <div style={{width:40,height:40,borderRadius:"50%",background:teamCol,
         display:"flex",alignItems:"center",justifyContent:"center",
-        fontSize:16,fontWeight:700,color:"#fff",flexShrink:0,
+        fontSize:16,fontWeight:700,color:"#fff",flexShrink:0,overflow:"hidden",
         boxShadow:`0 0 0 2px ${isTurn?"#28a028":"rgba(255,255,255,.2)"}`}}>
-        {player.name[0].toUpperCase()}
+        {player.avatarUrl
+          ?<img src={player.avatarUrl} alt={player.name} style={{width:"100%",height:"100%",objectFit:"cover",objectPosition:"center"}}/>
+          :player.name[0].toUpperCase()}
       </div>
       {/* Info */}
       <div style={{textAlign:isTop?"left":"center",minWidth:0}}>
@@ -378,12 +394,12 @@ function PlayerPanel({player,bid,made,isDealer,isTurn,teamCol,score,cardCount,po
         <div style={{color:"rgba(255,255,255,.55)",fontSize:10,marginTop:2,whiteSpace:"nowrap"}}>
           {score??0} pts
         </div>
-        <div style={{display:"flex",alignItems:"center",gap:6,marginTop:3,justifyContent:isTop?"flex-start":"center"}}>
-          <span style={{color:"rgba(255,255,255,.7)",fontSize:11,fontWeight:700}}>
-            {made??0}<span style={{color:"rgba(255,255,255,.35)"}}>/{bid??'?'}</span>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginTop:4,justifyContent:isTop?"flex-start":"center"}}>
+          <span style={{color:"#fff",fontSize:16,fontWeight:700,letterSpacing:.5,lineHeight:1}}>
+            {made??0}<span style={{color:"rgba(255,255,255,.4)",fontSize:13}}>/{bid??'?'}</span>
           </span>
-          <span style={{color:"rgba(255,255,255,.3)",fontSize:10}}>tricks</span>
-          <span style={{background:"rgba(255,255,255,.12)",borderRadius:5,padding:"1px 6px",fontSize:10,color:"rgba(255,255,255,.5)"}}>
+          <span style={{color:"rgba(255,255,255,.35)",fontSize:10,letterSpacing:.5}}>tricks</span>
+          <span style={{background:"rgba(255,255,255,.1)",borderRadius:5,padding:"1px 7px",fontSize:10,color:"rgba(255,255,255,.4)"}}>
             🂠 {cardCount}
           </span>
         </div>
@@ -393,15 +409,30 @@ function PlayerPanel({player,bid,made,isDealer,isTurn,teamCol,score,cardCount,po
 }
 
 function BidPanel({min,max,isInitial,onBid}){
+  const[sel,setSel]=useState(null);
   return(
     <div style={{background:"rgba(255,255,255,.94)",border:"2px solid #c8b880",borderRadius:14,padding:"12px 18px",textAlign:"center",boxShadow:"0 6px 20px rgba(0,0,0,.2)"}}>
       <div style={{color:"#4a3810",fontSize:11,letterSpacing:1,marginBottom:10,fontWeight:700}}>{isInitial?`BID (min ${min})`:"YOUR BID"}</div>
-      <div style={{display:"flex",gap:7,justifyContent:"center",flexWrap:"wrap"}}>
+      <div style={{display:"flex",gap:7,justifyContent:"center",flexWrap:"wrap",marginBottom:sel!=null?10:0}}>
         {Array.from({length:max-min+1},(_,i)=>min+i).map(v=>(
-          <button key={v} onClick={()=>onBid(v)} style={{background:"#fff",border:"2px solid #c8b880",borderRadius:7,padding:"7px 15px",cursor:"pointer",color:"#111",fontSize:15,fontFamily:"Georgia,serif",fontWeight:700,minWidth:38}}>{v}</button>
+          <button key={v} onClick={()=>setSel(v)}
+            style={{background:sel===v?"#2a5e2a":"#fff",border:sel===v?"2px solid #2a5e2a":"2px solid #c8b880",
+              borderRadius:7,padding:"7px 15px",cursor:"pointer",
+              color:sel===v?"#fff":"#111",fontSize:15,fontFamily:"Georgia,serif",fontWeight:700,minWidth:38,
+              transition:"all .1s"}}>{v}</button>
         ))}
-        {isInitial&&<button onClick={()=>onBid("pass")} style={{background:"#fff4f4",border:"2px solid #e08080",borderRadius:7,padding:"7px 15px",cursor:"pointer",color:"#a02020",fontSize:13,fontFamily:"Georgia,serif",fontWeight:700}}>Pass</button>}
+        {isInitial&&<button onClick={()=>onBid("pass")}
+          style={{background:"#fff4f4",border:"2px solid #e08080",borderRadius:7,padding:"7px 15px",
+            cursor:"pointer",color:"#a02020",fontSize:13,fontFamily:"Georgia,serif",fontWeight:700}}>Pass</button>}
       </div>
+      {sel!=null&&(
+        <button onClick={()=>onBid(sel)}
+          style={{background:"linear-gradient(135deg,#2a5e2a,#48904a)",border:"none",borderRadius:9,
+            padding:"8px 28px",color:"#fff",fontWeight:700,cursor:"pointer",
+            fontFamily:"Georgia,serif",fontSize:14,boxShadow:"0 3px 10px rgba(0,0,0,.2)"}}>
+          Bid {sel} ✓
+        </button>
+      )}
     </div>
   );
 }
@@ -446,30 +477,53 @@ function ProfilePage({user, onBack, onSave}){
   const[lastName,setLN]=useState(user?.last_name||"");
   const[gradYear,setGY]=useState(user?.grad_year?String(user.grad_year):"");
   const[username,setUN]=useState(user?.username||"");
+  const[avatarPreview,setAP]=useState(user?.avatar_url||null);
+  const[avatarFile,setAF]=useState(null);
+  const[uploadProgress,setUP]=useState(false);
   const[saving,setSaving]=useState(false);
   const[saved,setSaved]=useState(false);
   const[err,setErr]=useState("");
+  const fileRef=React.useRef();
 
   const isIncomplete=!user?.first_name||!user?.last_name||!user?.grad_year;
+  const displayName=firstName||username||user?.username||"?";
+
+  function handleFileChange(e){
+    const f=e.target.files?.[0]; if(!f) return;
+    if(!f.type.startsWith("image/")){setErr("Please select an image file");return;}
+    if(f.size>5*1024*1024){setErr("Image must be under 5MB");return;}
+    setAF(f);
+    const reader=new FileReader();
+    reader.onload=ev=>setAP(ev.target.result);
+    reader.readAsDataURL(f);
+    setErr("");
+  }
 
   async function save(){
     if(!username.trim()){setErr("Username is required");return;}
     setSaving(true);setErr("");
     try{
-      await sbUpdateProfile(user.id,{first_name:firstName.trim(),last_name:lastName.trim(),grad_year:gradYear,username:username.trim()});
+      let finalAvatarUrl=user?.avatar_url||null;
+      if(avatarFile){
+        setUP(true);
+        finalAvatarUrl=await sbUploadAvatar(user.id,avatarFile);
+        setUP(false);
+      }
+      await sbUpdateProfile(user.id,{first_name:firstName.trim(),last_name:lastName.trim(),grad_year:gradYear,username:username.trim(),avatar_url:finalAvatarUrl});
       setSaved(true);
-      onSave({...user,first_name:firstName.trim(),last_name:lastName.trim(),grad_year:gradYear?parseInt(gradYear):null,username:username.trim()});
+      onSave({...user,first_name:firstName.trim(),last_name:lastName.trim(),grad_year:gradYear?parseInt(gradYear):null,username:username.trim(),avatar_url:finalAvatarUrl});
       setTimeout(()=>setSaved(false),2500);
-    }catch(e){setErr(e.message||"Save failed");}
+    }catch(e){setErr(e.message||"Save failed");setUP(false);}
     setSaving(false);
   }
 
   const inp={width:"100%",boxSizing:"border-box",background:"#fff",border:"2px solid #c8b880",borderRadius:8,padding:"10px 14px",color:"#111",fontFamily:"Georgia,serif",fontSize:14,outline:"none"};
   const lbl={color:"#5a4a2a",fontSize:11,letterSpacing:1,marginBottom:5,fontWeight:700,display:"block"};
+  const teamCol="#2a5e2a";
 
   return(
     <div style={{minHeight:"100vh",background:"#1a1a2e",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Georgia,serif",backgroundImage:"radial-gradient(ellipse at 50% 30%, #2a2a4e, #0a0a1e)"}}>
-      <div style={{width:440,padding:36,background:"rgba(255,255,255,.96)",borderRadius:18,boxShadow:"0 10px 40px rgba(0,0,0,.4)"}}>
+      <div style={{width:480,padding:36,background:"rgba(255,255,255,.96)",borderRadius:18,boxShadow:"0 10px 40px rgba(0,0,0,.4)"}}>
         <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:24}}>
           <button onClick={onBack} style={{background:"none",border:"1.5px solid #ccc",borderRadius:7,padding:"5px 12px",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:12,color:"#666"}}>← Back</button>
           <div>
@@ -484,6 +538,41 @@ function ProfilePage({user, onBack, onSave}){
           </div>
         )}
 
+        {/* ── AVATAR SECTION ── */}
+        <div style={{marginBottom:20}}>
+          <label style={lbl}>PROFILE PICTURE</label>
+          <div style={{display:"flex",alignItems:"center",gap:20}}>
+            {/* Live avatar preview — matches in-game size */}
+            <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:6}}>
+              <div style={{width:72,height:72,borderRadius:"50%",background:teamCol,overflow:"hidden",
+                display:"flex",alignItems:"center",justifyContent:"center",
+                border:"3px solid #c8b880",boxShadow:"0 3px 12px rgba(0,0,0,.2)",flexShrink:0}}>
+                {avatarPreview
+                  ?<img src={avatarPreview} alt="preview" style={{width:"100%",height:"100%",objectFit:"cover",objectPosition:"center"}}/>
+                  :<span style={{color:"#fff",fontSize:28,fontWeight:700}}>{displayName[0].toUpperCase()}</span>}
+              </div>
+              <span style={{fontSize:10,color:"#aaa",letterSpacing:.5}}>PREVIEW</span>
+            </div>
+            <div style={{flex:1}}>
+              <input ref={fileRef} type="file" accept="image/*" onChange={handleFileChange} style={{display:"none"}}/>
+              <button onClick={()=>fileRef.current?.click()}
+                style={{width:"100%",background:"#fff",border:"2px dashed #c8b880",borderRadius:8,
+                  padding:"12px",cursor:"pointer",color:"#5a4a2a",fontFamily:"Georgia,serif",fontSize:13,
+                  fontWeight:700,marginBottom:6,transition:"border-color .15s"}}>
+                {avatarPreview&&avatarPreview!==user?.avatar_url?"✓ Image selected — click to change":"📷 Upload Photo"}
+              </button>
+              {avatarPreview&&(
+                <button onClick={()=>{setAP(null);setAF(null);}}
+                  style={{width:"100%",background:"none",border:"1px solid #e0c0c0",borderRadius:7,
+                    padding:"6px",cursor:"pointer",color:"#a06060",fontSize:11,fontFamily:"Georgia,serif"}}>
+                  Remove photo
+                </button>
+              )}
+              <div style={{color:"#aaa",fontSize:10,marginTop:6}}>JPG, PNG or GIF · max 5MB · will be cropped to circle</div>
+            </div>
+          </div>
+        </div>
+
         <div style={{display:"flex",gap:10,marginBottom:16}}>
           <div style={{flex:1}}>
             <label style={lbl}>FIRST NAME</label>
@@ -495,7 +584,7 @@ function ProfilePage({user, onBack, onSave}){
           </div>
         </div>
 
-        <div style={{display:"flex",gap:10,marginBottom:16}}>
+        <div style={{display:"flex",gap:10,marginBottom:20}}>
           <div style={{flex:1}}>
             <label style={lbl}>USERNAME <span style={{color:"#aaa",fontWeight:400,fontSize:10}}>(shown in games)</span></label>
             <input value={username} onChange={e=>setUN(e.target.value)} placeholder="e.g. Dewski" style={inp}/>
@@ -508,8 +597,11 @@ function ProfilePage({user, onBack, onSave}){
 
         {err&&<div style={{color:"#c02020",fontSize:12,marginBottom:10}}>{err}</div>}
 
-        <button onClick={save} disabled={saving} style={{width:"100%",background:saved?"#28a028":"linear-gradient(135deg,#2a5e2a,#48904a)",border:"none",borderRadius:10,padding:"13px",color:"#fff",fontWeight:700,cursor:saving?"wait":"pointer",fontFamily:"Georgia,serif",fontSize:15,transition:"background .3s"}}>
-          {saved?"✓ Saved!":saving?"Saving…":"Save Profile"}
+        <button onClick={save} disabled={saving||uploadProgress}
+          style={{width:"100%",background:saved?"#28a028":"linear-gradient(135deg,#2a5e2a,#48904a)",
+            border:"none",borderRadius:10,padding:"13px",color:"#fff",fontWeight:700,
+            cursor:(saving||uploadProgress)?"wait":"pointer",fontFamily:"Georgia,serif",fontSize:15,transition:"background .3s"}}>
+          {saved?"✓ Saved!":uploadProgress?"Uploading photo…":saving?"Saving…":"Save Profile"}
         </button>
       </div>
     </div>
@@ -1054,7 +1146,7 @@ function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,on
   const isTurn=pi=>(phase==="PLAYING"&&currentPlayer===pi)||(phase==="BIDDING_INITIAL"&&currentBidder===pi)||(phase==="BIDDING_OTHERS"&&currentBidder===pi);
 
   return(
-    <div style={{height:"100vh",display:"flex",flexDirection:"column",fontFamily:"Georgia,serif",overflow:"hidden",background:"radial-gradient(ellipse at 50% 40%, #3a7a3a 0%, #1a4a1a 100%)"}}>
+    <div style={{height:"100vh",display:"flex",flexDirection:"column",fontFamily:"Georgia,serif",overflow:"hidden",background:"radial-gradient(ellipse at 50% 40%, #3a7a3a 0%, #1a4a1a 100%)",position:"relative"}}>
 
       {/* ── HEADER ── */}
       <div style={{background:"rgba(0,0,0,.6)",backdropFilter:"blur(8px)",padding:"6px 20px",display:"flex",alignItems:"center",gap:12,flexShrink:0,borderBottom:"1px solid rgba(255,255,255,.08)"}}>
@@ -1131,14 +1223,7 @@ function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,on
             {/* ── CENTER COLUMN: status + trick zone only ── */}
             <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:6,minWidth:0}}>
 
-              {/* Status banner — hidden during bidding turns */}
-              {!(isMyBidTurn&&(phase==="BIDDING_INITIAL"||phase==="BIDDING_OTHERS"||phase==="SET_TRUMP"))&&(
-                <div style={{background:"rgba(0,0,0,.5)",backdropFilter:"blur(4px)",borderRadius:20,padding:"5px 18px",
-                  color:pendingTrick?"#60e060":isMyTurn?"#f0e060":"rgba(255,255,255,.75)",
-                  fontSize:12,fontWeight:600,textAlign:"center",border:"1px solid rgba(255,255,255,.1)"}}>
-                  {status}
-                </div>
-              )}
+              {/* Status banner removed — moved to bottom-left HUD */}
 
               {/* ── TRICK ZONE ── */}
               <div onDragOver={e=>{e.preventDefault();setGlow(true);}}
@@ -1195,14 +1280,7 @@ function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,on
                   </div>}
               </div>
 
-              {/* ── ACTION BUTTONS below trick zone ── */}
-              {pendingTrick&&(
-                <div style={{display:"flex",gap:8}}>
-                  <button onClick={discard} style={{background:"linear-gradient(135deg,#28a028,#40c040)",border:"none",borderRadius:10,padding:"9px 24px",color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"Georgia,serif",fontSize:13,boxShadow:"0 4px 14px rgba(0,0,0,.3)"}}>✓ Discard Trick</button>
-                  {lastDiscard&&<button onClick={undo} style={{background:"rgba(255,255,255,.9)",border:"2px solid #c8a030",borderRadius:10,padding:"9px 16px",color:"#8a6010",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:12,fontWeight:700}}>↩ Undo</button>}
-                </div>
-              )}
-              {staged&&<button onClick={unstage} style={Sb.outBtn}>↩ Take card back</button>}
+              {/* Discard/undo/unstage moved to bottom-left HUD */}
             </div>
 
             {/* Right player */}
@@ -1257,6 +1335,32 @@ function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,on
         </div>
       </div>
 
+      {/* ── BOTTOM-LEFT HUD: status prompt + discard/undo/unstage ── */}
+      <div style={{position:"absolute",bottom:20,left:20,zIndex:40,display:"flex",flexDirection:"column",gap:8,alignItems:"flex-start",maxWidth:320}}>
+        <div style={{background:"rgba(0,0,0,.72)",backdropFilter:"blur(6px)",borderRadius:12,padding:"8px 16px",
+          border:`1px solid ${pendingTrick?"rgba(80,224,80,.35)":isMyTurn?"rgba(240,224,80,.35)":"rgba(255,255,255,.1)"}`,
+          color:pendingTrick?"#60e060":isMyTurn?"#f0e060":"rgba(255,255,255,.75)",
+          fontSize:13,fontWeight:600,lineHeight:1.4,pointerEvents:"none"}}>
+          {status}
+        </div>
+        {(pendingTrick||lastDiscard||staged)&&(
+          <div style={{display:"flex",gap:8}}>
+            {pendingTrick&&(
+              <button onClick={discard} style={{background:"linear-gradient(135deg,#28a028,#40c040)",border:"none",borderRadius:10,
+                padding:"9px 22px",color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"Georgia,serif",fontSize:13,
+                boxShadow:"0 4px 14px rgba(0,0,0,.4)"}}>✓ Discard Trick</button>
+            )}
+            {pendingTrick&&lastDiscard&&(
+              <button onClick={undo} style={{background:"rgba(255,255,255,.9)",border:"2px solid #c8a030",borderRadius:10,
+                padding:"9px 14px",color:"#8a6010",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:12,fontWeight:700}}>↩ Undo</button>
+            )}
+            {staged&&!pendingTrick&&(
+              <button onClick={unstage} style={Sb.outBtn}>↩ Take card back</button>
+            )}
+          </div>
+        )}
+      </div>
+
     </div>
   );
 }
@@ -1299,7 +1403,7 @@ export default function OkieApp(){
       if(session?.user){
         const meta=session.user.user_metadata;
         const profile=await sbGetProfile(session.user.id);
-        setUser({id:session.user.id,username:profile?.username||meta?.username||session.user.email?.split("@")[0],first_name:profile?.first_name,last_name:profile?.last_name,grad_year:profile?.grad_year});
+        setUser({id:session.user.id,username:profile?.username||meta?.username||session.user.email?.split("@")[0],first_name:profile?.first_name,last_name:profile?.last_name,grad_year:profile?.grad_year,avatar_url:profile?.avatar_url||null});
         setScreen("menu");
       }
     });
@@ -1343,10 +1447,10 @@ export default function OkieApp(){
   function startSolo(){
     const names=[pNames[0].trim()||"You",pNames[1].trim()||"Dewski",pNames[2].trim()||"Jackson",pNames[3].trim()||"Tim"];
     const players=[
-      {id:"p0",name:names[0],isBot:false,userId:user?.id},
-      {id:"p1",name:names[1],isBot:true},
-      {id:"p2",name:names[2],isBot:true},
-      {id:"p3",name:names[3],isBot:true},
+      {id:"p0",name:names[0],isBot:false,userId:user?.id,avatarUrl:user?.avatar_url||null},
+      {id:"p1",name:names[1],isBot:true,avatarUrl:null},
+      {id:"p2",name:names[2],isBot:true,avatarUrl:null},
+      {id:"p3",name:names[3],isBot:true,avatarUrl:null},
     ];
     const gs=initHand({players,dealer:0,handIndex:0,scores:{p0:0,p1:0,p2:0,p3:0},handScoreLog:[]});
     setMyGs(gs);setGD({game:null,seats:null,isMultiplayer:false});setScreen("game");
@@ -1383,8 +1487,12 @@ export default function OkieApp(){
     // Build full 4-player list, filling empty seats with bots
     const players=[0,1,2,3].map(i=>{
       const seat=seats.find(s=>s.seat_index===i);
-      if(seat?.player_id) return{id:`p${i}`,name:seat.player_name,isBot:false,userId:seat.player_id};
-      return{id:`p${i}`,name:botNames?.[i]||`Bot ${i+1}`,isBot:true,userId:null};
+      if(seat?.player_id){
+        // attach avatar if it's the current user (we have it); others will show initials for now
+        const avatarUrl=seat.player_id===user?.id?(user?.avatar_url||null):null;
+        return{id:`p${i}`,name:seat.player_name,isBot:false,userId:seat.player_id,avatarUrl};
+      }
+      return{id:`p${i}`,name:botNames?.[i]||`Bot ${i+1}`,isBot:true,userId:null,avatarUrl:null};
     });
     const hasBots=players.some(p=>p.isBot);
     // Mark game as bot game if any bots present
