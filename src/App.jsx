@@ -349,6 +349,49 @@ function NameBadge({player,bid,made,isDealer,isTurn,teamCol,score}){
   );
 }
 
+// Compact player panel replacing side/top card fans
+function PlayerPanel({player,bid,made,isDealer,isTurn,teamCol,score,cardCount,position}){
+  if(!player) return null;
+  const isTop=position==="top";
+  const glowStyle=isTurn?{boxShadow:"0 0 0 2px #28a028, 0 4px 20px rgba(40,160,40,.4)"}:{boxShadow:"0 2px 12px rgba(0,0,0,.3)"};
+  return(
+    <div style={{display:"flex",flexDirection:isTop?"row":"column",alignItems:"center",gap:isTop?16:8,
+      background:"rgba(0,0,0,.45)",backdropFilter:"blur(6px)",
+      border:`1.5px solid ${isTurn?"#28a028":teamCol+"88"}`,
+      borderRadius:14,padding:isTop?"10px 20px":"14px 12px",
+      fontFamily:"Georgia,serif",...glowStyle,transition:"box-shadow .2s"}}>
+      {/* Avatar */}
+      <div style={{width:40,height:40,borderRadius:"50%",background:teamCol,
+        display:"flex",alignItems:"center",justifyContent:"center",
+        fontSize:16,fontWeight:700,color:"#fff",flexShrink:0,
+        boxShadow:`0 0 0 2px ${isTurn?"#28a028":"rgba(255,255,255,.2)"}`}}>
+        {player.name[0].toUpperCase()}
+      </div>
+      {/* Info */}
+      <div style={{textAlign:isTop?"left":"center",minWidth:0}}>
+        <div style={{display:"flex",alignItems:"center",gap:5,justifyContent:isTop?"flex-start":"center"}}>
+          <span style={{color:"#fff",fontSize:13,fontWeight:700,whiteSpace:"nowrap"}}>{player.name.split(" ")[0]}</span>
+          {player.isBot&&<span style={{fontSize:11}}>🤖</span>}
+          {isDealer&&<span style={{background:"rgba(255,255,255,.25)",color:"#fff",fontSize:8,padding:"1px 5px",borderRadius:3,fontWeight:700,letterSpacing:.5}}>D</span>}
+          {isTurn&&<span style={{width:7,height:7,borderRadius:"50%",background:"#28a028",display:"inline-block",boxShadow:"0 0 8px #28a028",flexShrink:0}}/>}
+        </div>
+        <div style={{color:"rgba(255,255,255,.55)",fontSize:10,marginTop:2,whiteSpace:"nowrap"}}>
+          {score??0} pts
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:6,marginTop:3,justifyContent:isTop?"flex-start":"center"}}>
+          <span style={{color:"rgba(255,255,255,.7)",fontSize:11,fontWeight:700}}>
+            {made??0}<span style={{color:"rgba(255,255,255,.35)"}}>/{bid??'?'}</span>
+          </span>
+          <span style={{color:"rgba(255,255,255,.3)",fontSize:10}}>tricks</span>
+          <span style={{background:"rgba(255,255,255,.12)",borderRadius:5,padding:"1px 6px",fontSize:10,color:"rgba(255,255,255,.5)"}}>
+            🂠 {cardCount}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function BidPanel({min,max,isInitial,onBid}){
   return(
     <div style={{background:"rgba(255,255,255,.94)",border:"2px solid #c8b880",borderRadius:14,padding:"12px 18px",textAlign:"center",boxShadow:"0 6px 20px rgba(0,0,0,.2)"}}>
@@ -1012,137 +1055,209 @@ function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,on
 
   return(
     <div style={{height:"100vh",display:"flex",flexDirection:"column",fontFamily:"Georgia,serif",overflow:"hidden",background:"radial-gradient(ellipse at 50% 40%, #3a7a3a 0%, #1a4a1a 100%)"}}>
-      {/* Header */}
-      <div style={{background:"rgba(0,0,0,.55)",backdropFilter:"blur(6px)",padding:"5px 16px",display:"flex",alignItems:"center",gap:10,flexShrink:0,borderBottom:"1px solid rgba(255,255,255,.08)"}}>
-        <span style={{color:"#f0e6c8",fontWeight:700,fontSize:18,letterSpacing:4}}>OKIE</span>
-        <span style={{color:"rgba(255,255,255,.45)",fontSize:11,borderLeft:"1px solid rgba(255,255,255,.15)",paddingLeft:10}}>Hand {handIndex+1}/13 · {rule.cards} cards</span>
+
+      {/* ── HEADER ── */}
+      <div style={{background:"rgba(0,0,0,.6)",backdropFilter:"blur(8px)",padding:"6px 20px",display:"flex",alignItems:"center",gap:12,flexShrink:0,borderBottom:"1px solid rgba(255,255,255,.08)"}}>
+        <span style={{color:"#f0e6c8",fontWeight:700,fontSize:18,letterSpacing:4,marginRight:4}}>OKIE</span>
+        <span style={{color:"rgba(255,255,255,.4)",fontSize:11,borderLeft:"1px solid rgba(255,255,255,.12)",paddingLeft:12}}>Hand {handIndex+1}/13 · {rule.cards} cards</span>
+
+        {/* Trump pill */}
         {trumpSuit&&(
-          <div style={{display:"flex",alignItems:"center",gap:5,background:"rgba(255,255,255,.1)",borderRadius:6,padding:"2px 10px"}}>
+          <div style={{display:"flex",alignItems:"center",gap:6,background:"rgba(255,255,255,.1)",borderRadius:20,padding:"3px 12px",border:"1px solid rgba(255,255,255,.15)"}}>
             <span style={{color:"rgba(255,255,255,.45)",fontSize:9,letterSpacing:1}}>TRUMP</span>
-            <span style={{fontSize:18,color:["hearts","diamonds"].includes(trumpSuit)?"#ff8080":"#88bbff"}}>{SYM[trumpSuit]}</span>
-            <span style={{color:"#e8cc70",fontSize:10,fontWeight:700}}>{trumpSuit.toUpperCase()}</span>
-            <span style={{fontSize:9,color:trumpBroken?"#80e880":"rgba(255,255,255,.3)"}}>{trumpBroken?"broken ✓":"not broken"}</span>
+            <span style={{fontSize:20,color:["hearts","diamonds"].includes(trumpSuit)?"#ff7070":"#88ccff",lineHeight:1}}>{SYM[trumpSuit]}</span>
+            <span style={{color:"#e8cc70",fontSize:11,fontWeight:700}}>{trumpSuit.charAt(0).toUpperCase()+trumpSuit.slice(1)}</span>
+            <span style={{fontSize:9,color:trumpBroken?"#80e880":"rgba(255,255,255,.3)",marginLeft:2}}>{trumpBroken?"broken":"locked"}</span>
           </div>
         )}
-        {[0,1].map(ti=>(
-          <div key={ti} style={{display:"flex",alignItems:"center",gap:5,background:"rgba(255,255,255,.09)",border:`1px solid ${tc(ti)}55`,borderRadius:7,padding:"2px 9px"}}>
-            {editT===ti?(
-              <input autoFocus value={tIn} onChange={e=>setTI(e.target.value)}
-                onKeyDown={e=>{if(e.key==="Enter"){setTNM(n=>{const c=[...n];c[ti]=tIn||n[ti];return c;});setET(null);}if(e.key==="Escape")setET(null);}}
-                onBlur={()=>{setTNM(n=>{const c=[...n];c[ti]=tIn||n[ti];return c;});setET(null);}}
-                style={{width:70,background:"none",border:"none",borderBottom:`1px solid ${tc(ti)}`,color:"#f0e6c8",fontFamily:"Georgia,serif",fontSize:10,outline:"none"}}/>
-            ):(
-              <span style={{color:"rgba(255,255,255,.65)",fontSize:10,cursor:"pointer"}} onClick={()=>{setET(ti);setTI(tNamesMut[ti]);}}>{tNamesMut[ti]} ✎</span>
-            )}
-            <span style={{color:"#fff",fontWeight:700,fontSize:14}}>{ti===0?ts0:ts1}</span>
-          </div>
-        ))}
+
+        {/* Team scores — prominent */}
+        <div style={{display:"flex",gap:6,marginLeft:4}}>
+          {[0,1].map(ti=>(
+            <div key={ti} style={{display:"flex",alignItems:"center",gap:7,background:"rgba(255,255,255,.09)",border:`1.5px solid ${tc(ti)}66`,borderRadius:10,padding:"3px 12px"}}>
+              <div style={{width:8,height:8,borderRadius:"50%",background:tc(ti)}}/>
+              {editT===ti?(
+                <input autoFocus value={tIn} onChange={e=>setTI(e.target.value)}
+                  onKeyDown={e=>{if(e.key==="Enter"){setTNM(n=>{const c=[...n];c[ti]=tIn||n[ti];return c;});setET(null);}if(e.key==="Escape")setET(null);}}
+                  onBlur={()=>{setTNM(n=>{const c=[...n];c[ti]=tIn||n[ti];return c;});setET(null);}}
+                  style={{width:70,background:"none",border:"none",borderBottom:`1px solid ${tc(ti)}`,color:"#f0e6c8",fontFamily:"Georgia,serif",fontSize:11,outline:"none"}}/>
+              ):(
+                <span style={{color:"rgba(255,255,255,.7)",fontSize:11,cursor:"pointer"}} onClick={()=>{setET(ti);setTI(tNamesMut[ti]);}}>{tNamesMut[ti]}</span>
+              )}
+              <span style={{color:"#fff",fontWeight:700,fontSize:16,minWidth:20,textAlign:"right"}}>{ti===0?ts0:ts1}</span>
+            </div>
+          ))}
+        </div>
+
         <div style={{marginLeft:"auto",display:"flex",gap:6}}>
           <button onClick={()=>setShowLog(v=>!v)} style={Sb.hBtn}>{showLog?"▼":"▶"} Log</button>
           <button onClick={onGameEnd} style={Sb.hBtn}>Menu</button>
         </div>
       </div>
 
-      {/* Body */}
-      <div style={{flex:1,display:"flex",overflow:"hidden"}}>
+      {/* ── BODY ── */}
+      <div style={{flex:1,display:"flex",overflow:"hidden",minHeight:0}}>
+
+        {/* Log panel */}
         {showLog&&<div style={{width:175,background:"rgba(0,0,0,.5)",borderRight:"1px solid rgba(255,255,255,.08)",overflowY:"auto",padding:"8px 10px",flexShrink:0}}>
           <div style={{color:"rgba(255,255,255,.3)",fontSize:9,letterSpacing:1,marginBottom:5}}>LOG</div>
           {log.map((l,i)=><div key={i} style={{color:"rgba(255,255,255,.5)",fontSize:10,lineHeight:1.5,borderBottom:"1px solid rgba(255,255,255,.06)",paddingBottom:2,marginBottom:2}}>{l}</div>)}
         </div>}
 
-        <div style={{flex:1,display:"flex",flexDirection:"column",minWidth:0}}>
-          {/* Top: partner */}
-          <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4,paddingTop:8,flexShrink:0}}>
-            <NameBadge player={players[partIdx]} bid={bids[players[partIdx]?.id]} made={made[players[partIdx]?.id]||0} isDealer={dealer===partIdx} isTurn={isTurn(partIdx)} score={scores[players[partIdx]?.id]||0} teamCol={tc(tOf(partIdx))}/>
-            <FanBacks count={gs.hands[players[partIdx]?.id]?.length||0} orientation="top"/>
+        {/* Main table area */}
+        <div style={{flex:1,display:"flex",flexDirection:"column",minWidth:0,padding:"12px 20px 8px",gap:8}}>
+
+          {/* ── TOP: Partner ── */}
+          <div style={{display:"flex",justifyContent:"center",flexShrink:0}}>
+            <PlayerPanel position="top"
+              player={players[partIdx]} bid={bids[players[partIdx]?.id]} made={made[players[partIdx]?.id]||0}
+              isDealer={dealer===partIdx} isTurn={isTurn(partIdx)}
+              score={scores[players[partIdx]?.id]||0} teamCol={tc(tOf(partIdx))}
+              cardCount={gs.hands[players[partIdx]?.id]?.length||0}/>
           </div>
 
-          {/* Middle row */}
-          <div style={{flex:1,display:"flex",alignItems:"center",minHeight:0}}>
-            <div style={{width:120,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:8,flexShrink:0,padding:"0 4px"}}>
-              <NameBadge player={players[leftIdx]} bid={bids[players[leftIdx]?.id]} made={made[players[leftIdx]?.id]||0} isDealer={dealer===leftIdx} isTurn={isTurn(leftIdx)} score={scores[players[leftIdx]?.id]||0} teamCol={tc(tOf(leftIdx))}/>
-              <FanBacks count={gs.hands[players[leftIdx]?.id]?.length||0} orientation="left"/>
+          {/* ── MIDDLE ROW: left player | trick area + action | right player ── */}
+          <div style={{flex:1,display:"flex",alignItems:"center",gap:16,minHeight:0}}>
+
+            {/* Left player */}
+            <div style={{flexShrink:0}}>
+              <PlayerPanel position="side"
+                player={players[leftIdx]} bid={bids[players[leftIdx]?.id]} made={made[players[leftIdx]?.id]||0}
+                isDealer={dealer===leftIdx} isTurn={isTurn(leftIdx)}
+                score={scores[players[leftIdx]?.id]||0} teamCol={tc(tOf(leftIdx))}
+                cardCount={gs.hands[players[leftIdx]?.id]?.length||0}/>
             </div>
 
-            {/* Center */}
-            <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:8,minWidth:0,padding:"8px 0"}}>
-              <div style={{background:"rgba(0,0,0,.45)",backdropFilter:"blur(4px)",borderRadius:20,padding:"5px 18px",color:"rgba(255,255,255,.9)",fontSize:12,fontWeight:600,textAlign:"center",maxWidth:300}}>{status}</div>
+            {/* ── CENTER: trick zone + action area ── */}
+            <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:10,minWidth:0}}>
 
-              {/* Trick area */}
-              <div onDragOver={e=>{e.preventDefault();setGlow(true);}} onDrop={e=>{e.preventDefault();setGlow(false);const src=e.dataTransfer.getData("source"),idx=parseInt(e.dataTransfer.getData("cardIndex"));if(src==="hand"&&!isNaN(idx)&&isMyTurn)stageCard(myHand[idx]);}} onDragLeave={()=>setGlow(false)}
-                style={{position:"relative",width:280,height:240,background:glow?"rgba(80,200,80,.06)":"rgba(0,0,0,.15)",border:glow?"2px dashed rgba(80,200,80,.5)":"2px dashed rgba(255,255,255,.1)",borderRadius:24,flexShrink:0,transition:"all .15s"}}>
-                {/* Partner top */}
-                <div style={{position:"absolute",top:8,left:"50%",transform:"translateX(-50%)"}}>
-                  {tByP[players[partIdx]?.id]?<CardFace card={tByP[players[partIdx].id]} small highlight={pendingTrick?.winnerId===players[partIdx]?.id} disabled/>:<div style={{width:54,height:78,border:"1px dashed rgba(255,255,255,.18)",borderRadius:9}}/>}
+              {/* Status banner — only show when not bidding (bid panel replaces it) */}
+              {!(isMyBidTurn&&(phase==="BIDDING_INITIAL"||phase==="BIDDING_OTHERS"||phase==="SET_TRUMP"))&&(
+                <div style={{background:"rgba(0,0,0,.5)",backdropFilter:"blur(4px)",borderRadius:20,padding:"6px 20px",
+                  color:pendingTrick?"#60e060":isMyTurn?"#f0e060":"rgba(255,255,255,.8)",
+                  fontSize:13,fontWeight:600,textAlign:"center",border:"1px solid rgba(255,255,255,.1)"}}>
+                  {status}
                 </div>
+              )}
+
+              {/* ── TRICK AREA ── */}
+              <div onDragOver={e=>{e.preventDefault();setGlow(true);}}
+                onDrop={e=>{e.preventDefault();setGlow(false);const src=e.dataTransfer.getData("source"),idx=parseInt(e.dataTransfer.getData("cardIndex"));if(src==="hand"&&!isNaN(idx)&&isMyTurn)stageCard(myHand[idx]);}}
+                onDragLeave={()=>setGlow(false)}
+                style={{position:"relative",width:300,height:260,
+                  background:glow?"rgba(80,200,80,.07)":"rgba(0,0,0,.18)",
+                  border:glow?"2px dashed rgba(80,200,80,.6)":isMyTurn?"2px dashed rgba(255,255,255,.2)":"1px solid rgba(255,255,255,.08)",
+                  borderRadius:28,flexShrink:0,transition:"all .15s",
+                  boxShadow:"inset 0 2px 20px rgba(0,0,0,.2)"}}>
+
+                {/* Partner (top) */}
+                <div style={{position:"absolute",top:12,left:"50%",transform:"translateX(-50%)",display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
+                  {tByP[players[partIdx]?.id]
+                    ?<CardFace card={tByP[players[partIdx].id]} small highlight={pendingTrick?.winnerId===players[partIdx]?.id} disabled/>
+                    :<div style={{width:54,height:78,border:"1px dashed rgba(255,255,255,.15)",borderRadius:9}}/>}
+                </div>
+
                 {/* Left */}
-                <div style={{position:"absolute",left:8,top:"50%",transform:"translateY(-50%)"}}>
-                  {tByP[players[leftIdx]?.id]?<CardFace card={tByP[players[leftIdx].id]} small highlight={pendingTrick?.winnerId===players[leftIdx]?.id} disabled/>:<div style={{width:54,height:78,border:"1px dashed rgba(255,255,255,.18)",borderRadius:9}}/>}
+                <div style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
+                  {tByP[players[leftIdx]?.id]
+                    ?<CardFace card={tByP[players[leftIdx].id]} small highlight={pendingTrick?.winnerId===players[leftIdx]?.id} disabled/>
+                    :<div style={{width:54,height:78,border:"1px dashed rgba(255,255,255,.15)",borderRadius:9}}/>}
                 </div>
+
                 {/* Right */}
-                <div style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)"}}>
-                  {tByP[players[rightIdx]?.id]?<CardFace card={tByP[players[rightIdx].id]} small highlight={pendingTrick?.winnerId===players[rightIdx]?.id} disabled/>:<div style={{width:54,height:78,border:"1px dashed rgba(255,255,255,.18)",borderRadius:9}}/>}
+                <div style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
+                  {tByP[players[rightIdx]?.id]
+                    ?<CardFace card={tByP[players[rightIdx].id]} small highlight={pendingTrick?.winnerId===players[rightIdx]?.id} disabled/>
+                    :<div style={{width:54,height:78,border:"1px dashed rgba(255,255,255,.15)",borderRadius:9}}/>}
                 </div>
-                {/* My slot (bottom) */}
-                <div style={{position:"absolute",bottom:8,left:"50%",transform:"translateX(-50%)"}}>
+
+                {/* Me (bottom) */}
+                <div style={{position:"absolute",bottom:12,left:"50%",transform:"translateX(-50%)",display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
                   {staged&&!tByP[players[viewAs]?.id]
-                    ?<div onClick={reveal} style={{cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:2}}><CardBack small glow/><span style={{color:"#e8d050",fontSize:8,background:"rgba(0,0,0,.55)",borderRadius:3,padding:"1px 5px",whiteSpace:"nowrap"}}>tap to reveal</span></div>
+                    ?<div onClick={reveal} style={{cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
+                        <CardBack small glow/>
+                        <span style={{color:"#e8d050",fontSize:9,background:"rgba(0,0,0,.6)",borderRadius:4,padding:"2px 6px",whiteSpace:"nowrap",fontWeight:700}}>tap to reveal</span>
+                      </div>
                     :tByP[players[viewAs]?.id]
-                      ?<div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+                      ?<div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
                           <CardFace card={tByP[players[viewAs].id]} small highlight={pendingTrick?.winnerId===players[viewAs]?.id} disabled/>
-                          {pendingTrick?.winnerId===players[viewAs]?.id&&<span style={{color:"#28c028",fontSize:8,background:"rgba(255,255,255,.9)",borderRadius:3,padding:"1px 4px",fontWeight:700}}>✓ wins</span>}
+                          {pendingTrick?.winnerId===players[viewAs]?.id&&<span style={{color:"#28c028",fontSize:9,background:"rgba(255,255,255,.9)",borderRadius:4,padding:"2px 6px",fontWeight:700}}>✓ you win!</span>}
                         </div>
-                      :<div style={{width:54,height:78,border:isMyTurn?"2px dashed rgba(80,200,80,.4)":"1px dashed rgba(255,255,255,.18)",borderRadius:9,background:isMyTurn?"rgba(80,200,80,.05)":"transparent",transition:"all .15s"}}/>}
+                      :<div style={{width:54,height:78,
+                          border:isMyTurn?"2px dashed rgba(100,220,100,.5)":"1px dashed rgba(255,255,255,.15)",
+                          borderRadius:9,background:isMyTurn?"rgba(80,200,80,.06)":"transparent",
+                          transition:"all .15s"}}/>}
                 </div>
-                {pendingTrick&&<div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",color:"#28c028",fontSize:12,fontWeight:700,background:"rgba(0,0,0,.6)",borderRadius:8,padding:"3px 10px",whiteSpace:"nowrap",pointerEvents:"none"}}>🏆 {pendingTrick.winnerName}</div>}
-                {isMyTurn&&!staged&&!Object.keys(tByP).length&&<div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",color:"rgba(255,255,255,.2)",fontSize:12,textAlign:"center",pointerEvents:"none",lineHeight:1.4}}>drag card<br/>here</div>}
+
+                {/* Trick winner overlay */}
+                {pendingTrick&&<div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",
+                  color:"#50e050",fontSize:13,fontWeight:700,background:"rgba(0,0,0,.7)",
+                  borderRadius:10,padding:"4px 14px",whiteSpace:"nowrap",pointerEvents:"none",
+                  border:"1px solid rgba(80,224,80,.3)"}}>🏆 {pendingTrick.winnerName}</div>}
+
+                {/* Drag hint */}
+                {isMyTurn&&!staged&&!Object.keys(tByP).length&&
+                  <div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",
+                    color:"rgba(255,255,255,.18)",fontSize:13,textAlign:"center",pointerEvents:"none",lineHeight:1.6}}>
+                    drag a card here
+                  </div>}
               </div>
 
-              {pendingTrick&&(
-                <div style={{display:"flex",gap:8}}>
-                  <button onClick={discard} style={{background:"#28a028",border:"none",borderRadius:9,padding:"8px 22px",color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"Georgia,serif",fontSize:13,boxShadow:"0 3px 10px rgba(0,0,0,.25)"}}>✓ Discard Trick</button>
-                  {lastDiscard&&<button onClick={undo} style={{background:"rgba(255,255,255,.88)",border:"2px solid #c8a030",borderRadius:9,padding:"8px 16px",color:"#8a6010",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:12,fontWeight:700}}>↩ Undo</button>}
-                </div>
-              )}
+              {/* ── ACTION AREA (below trick zone) ── */}
+              <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:8,width:"100%",maxWidth:420}}>
 
-              {!pendingTrick&&phase==="BIDDING_INITIAL"&&players[currentBidder]?.id===players[viewAs]?.id&&<BidPanel min={Math.max(rule.minBid,(highBid||0)+1)} max={rule.cards} isInitial onBid={humanBid}/>}
-              {!pendingTrick&&phase==="SET_TRUMP"&&players[highBidder]?.id===players[viewAs]?.id&&(
-                <div style={{background:"rgba(255,255,255,.94)",border:"2px solid #c8b880",borderRadius:14,padding:"12px 18px",textAlign:"center",boxShadow:"0 6px 20px rgba(0,0,0,.2)"}}>
-                  <div style={{color:"#4a3810",fontSize:11,letterSpacing:1,marginBottom:10,fontWeight:700}}>CHOOSE TRUMP SUIT</div>
-                  <div style={{display:"flex",gap:8,justifyContent:"center",marginBottom:12}}>
-                    {SUITS.map(s=><button key={s} onClick={()=>setTP(s)} style={{background:tPick===s?"#fff":"rgba(255,255,255,.5)",border:tPick===s?`2.5px solid ${SCLR[s]}`:"2px solid #ccc",borderRadius:9,padding:"6px 13px",cursor:"pointer",color:SCLR[s],fontSize:26}}>{SYM[s]}</button>)}
+                {/* Discard / Undo */}
+                {pendingTrick&&(
+                  <div style={{display:"flex",gap:8}}>
+                    <button onClick={discard} style={{background:"linear-gradient(135deg,#28a028,#40c040)",border:"none",borderRadius:10,padding:"10px 28px",color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"Georgia,serif",fontSize:14,boxShadow:"0 4px 14px rgba(0,0,0,.3)"}}>✓ Discard Trick</button>
+                    {lastDiscard&&<button onClick={undo} style={{background:"rgba(255,255,255,.9)",border:"2px solid #c8a030",borderRadius:10,padding:"10px 18px",color:"#8a6010",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:13,fontWeight:700}}>↩ Undo</button>}
                   </div>
-                  <button onClick={humanSetTrump} style={{background:"linear-gradient(135deg,#2a5e2a,#48904a)",border:"none",borderRadius:9,padding:"8px 24px",color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"Georgia,serif",fontSize:14}}>Set {tPick.charAt(0).toUpperCase()+tPick.slice(1)}</button>
-                </div>
-              )}
-              {!pendingTrick&&phase==="BIDDING_OTHERS"&&players[currentBidder]?.id===players[viewAs]?.id&&<BidPanel min={0} max={rule.cards} isInitial={false} onBid={humanBidOther}/>}
+                )}
 
-              {phase==="PLAYING"&&(
-                <div style={{display:"flex",gap:7,flexWrap:"wrap",justifyContent:"center"}}>
-                  {players.map((p,i)=>(
-                    <div key={p.id} style={{background:"rgba(0,0,0,.35)",border:`1px solid ${tc(tOf(i))}55`,borderRadius:7,padding:"3px 10px",textAlign:"center"}}>
-                      <div style={{color:`${tc(tOf(i))}cc`,fontSize:9,fontWeight:700}}>{p.name.split(" ")[0]}</div>
-                      <div style={{color:"#fff",fontSize:12,fontWeight:700}}>{made[p.id]||0}<span style={{color:"rgba(255,255,255,.4)",fontSize:10}}>/{bids[p.id]??'?'}</span></div>
+                {/* Bid panels — shown prominently when it's your turn */}
+                {!pendingTrick&&phase==="BIDDING_INITIAL"&&players[currentBidder]?.id===players[viewAs]?.id&&(
+                  <BidPanel min={Math.max(rule.minBid,(highBid||0)+1)} max={rule.cards} isInitial onBid={humanBid}/>
+                )}
+                {!pendingTrick&&phase==="SET_TRUMP"&&players[highBidder]?.id===players[viewAs]?.id&&(
+                  <div style={{background:"rgba(255,255,255,.95)",border:"2px solid #c8b880",borderRadius:14,padding:"14px 20px",textAlign:"center",boxShadow:"0 8px 24px rgba(0,0,0,.3)"}}>
+                    <div style={{color:"#4a3810",fontSize:11,letterSpacing:1,marginBottom:12,fontWeight:700}}>CHOOSE TRUMP SUIT</div>
+                    <div style={{display:"flex",gap:10,justifyContent:"center",marginBottom:14}}>
+                      {SUITS.map(s=><button key={s} onClick={()=>setTP(s)} style={{background:tPick===s?"#fff":"rgba(255,255,255,.5)",border:tPick===s?`2.5px solid ${SCLR[s]}`:"2px solid #ddd",borderRadius:10,padding:"8px 16px",cursor:"pointer",color:SCLR[s],fontSize:28,transition:"all .12s",boxShadow:tPick===s?`0 2px 10px ${SCLR[s]}44`:"none"}}>{SYM[s]}</button>)}
                     </div>
-                  ))}
-                </div>
-              )}
-              {staged&&<button onClick={unstage} style={Sb.outBtn}>↩ Take card back</button>}
+                    <button onClick={humanSetTrump} style={{background:"linear-gradient(135deg,#2a5e2a,#48904a)",border:"none",borderRadius:9,padding:"9px 28px",color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"Georgia,serif",fontSize:14}}>Set {tPick.charAt(0).toUpperCase()+tPick.slice(1)}</button>
+                  </div>
+                )}
+                {!pendingTrick&&phase==="BIDDING_OTHERS"&&players[currentBidder]?.id===players[viewAs]?.id&&(
+                  <BidPanel min={0} max={rule.cards} isInitial={false} onBid={humanBidOther}/>
+                )}
+
+                {/* Take card back */}
+                {staged&&<button onClick={unstage} style={Sb.outBtn}>↩ Take card back</button>}
+              </div>
             </div>
 
-            <div style={{width:120,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:8,flexShrink:0,padding:"0 4px"}}>
-              <NameBadge player={players[rightIdx]} bid={bids[players[rightIdx]?.id]} made={made[players[rightIdx]?.id]||0} isDealer={dealer===rightIdx} isTurn={isTurn(rightIdx)} score={scores[players[rightIdx]?.id]||0} teamCol={tc(tOf(rightIdx))}/>
-              <FanBacks count={gs.hands[players[rightIdx]?.id]?.length||0} orientation="right"/>
+            {/* Right player */}
+            <div style={{flexShrink:0}}>
+              <PlayerPanel position="side"
+                player={players[rightIdx]} bid={bids[players[rightIdx]?.id]} made={made[players[rightIdx]?.id]||0}
+                isDealer={dealer===rightIdx} isTurn={isTurn(rightIdx)}
+                score={scores[players[rightIdx]?.id]||0} teamCol={tc(tOf(rightIdx))}
+                cardCount={gs.hands[players[rightIdx]?.id]?.length||0}/>
             </div>
           </div>
 
-          {/* Bottom: my hand */}
-          <div style={{flexShrink:0,paddingBottom:6}}>
-            <div style={{display:"flex",justifyContent:"center",alignItems:"center",gap:10,marginBottom:4}}>
-              <NameBadge player={players[viewAs]} bid={bids[players[viewAs]?.id]} made={made[players[viewAs]?.id]||0} isDealer={dealer===viewAs} isTurn={isTurn(viewAs)} score={scores[players[viewAs]?.id]||0} teamCol={tc(tOf(viewAs))}/>
+          {/* ── BOTTOM: My name + hand ── */}
+          <div style={{flexShrink:0,paddingBottom:4}}>
+            <div style={{display:"flex",justifyContent:"center",marginBottom:6}}>
+              <PlayerPanel position="top"
+                player={players[viewAs]} bid={bids[players[viewAs]?.id]} made={made[players[viewAs]?.id]||0}
+                isDealer={dealer===viewAs} isTurn={isTurn(viewAs)}
+                score={scores[players[viewAs]?.id]||0} teamCol={tc(tOf(viewAs))}
+                cardCount={myHand.length}/>
             </div>
             <ArcHand cards={myHand} onReorder={reorder} canDrag={isMyTurn} stagedId={staged?.id}/>
           </div>
+
         </div>
       </div>
     </div>
