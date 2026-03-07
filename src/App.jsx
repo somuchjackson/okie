@@ -1215,9 +1215,9 @@ function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,on
             </div>
           </div>
 
-          {/* ── BOTTOM: bid panel (if bidding) + hand ── */}
-          <div style={{flexShrink:0,paddingBottom:4}}>
-            {/* Bid panels — above my hand */}
+          {/* ── BOTTOM: hand row with my panel anchored bottom-right ── */}
+          <div style={{flexShrink:0,paddingBottom:4,position:"relative"}}>
+            {/* Bid panels — centered above hand */}
             {!pendingTrick&&phase==="BIDDING_INITIAL"&&players[currentBidder]?.id===players[viewAs]?.id&&(
               <div style={{display:"flex",justifyContent:"center",marginBottom:6}}>
                 <BidPanel min={Math.max(rule.minBid,(highBid||0)+1)} max={rule.cards} isInitial onBid={humanBid}/>
@@ -1239,19 +1239,22 @@ function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,on
                 <BidPanel min={0} max={rule.cards} isInitial={false} onBid={humanBidOther}/>
               </div>
             )}
-            <ArcHand cards={myHand} onReorder={reorder} canDrag={isMyTurn} stagedId={staged?.id}/>
+            {/* Hand + my panel side by side */}
+            <div style={{display:"flex",alignItems:"flex-end",gap:12}}>
+              <div style={{flex:1}}>
+                <ArcHand cards={myHand} onReorder={reorder} canDrag={isMyTurn} stagedId={staged?.id}/>
+              </div>
+              <div style={{flexShrink:0,paddingBottom:8}}>
+                <PlayerPanel position="side"
+                  player={players[viewAs]} bid={bids[players[viewAs]?.id]} made={made[players[viewAs]?.id]||0}
+                  isDealer={dealer===viewAs} isTurn={isTurn(viewAs)}
+                  score={scores[players[viewAs]?.id]||0} teamCol={tc(tOf(viewAs))}
+                  cardCount={myHand.length}/>
+              </div>
+            </div>
           </div>
 
         </div>
-      </div>
-
-      {/* ── MY PLAYER PANEL: fixed bottom-right, never overlaps anything ── */}
-      <div style={{position:"fixed",bottom:16,right:16,zIndex:50}}>
-        <PlayerPanel position="top"
-          player={players[viewAs]} bid={bids[players[viewAs]?.id]} made={made[players[viewAs]?.id]||0}
-          isDealer={dealer===viewAs} isTurn={isTurn(viewAs)}
-          score={scores[players[viewAs]?.id]||0} teamCol={tc(tOf(viewAs))}
-          cardCount={myHand.length}/>
       </div>
 
     </div>
