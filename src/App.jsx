@@ -83,15 +83,18 @@ function initHand(gs){
 // ─────────────────────────────────────────────────────────────────────────────
 // SUPABASE AUTH & DATA FUNCTIONS
 // ─────────────────────────────────────────────────────────────────────────────
-async function sbSignUp(username, email, password){
+async function sbSignUp(username, email, password, firstName, lastName, gradYear){
   const sb=getSB(); if(!sb) throw new Error("Not connected");
   const {data,error}=await sb.auth.signUp({email,password,options:{data:{username}}});
   if(error) throw error;
   if(data.user){
     await sb.from("profiles").upsert({
       id: data.user.id,
-      username: username,
+      username,
       display_name: username,
+      first_name: firstName,
+      last_name: lastName,
+      grad_year: gradYear?parseInt(gradYear):null,
     });
   }
   return data.user;
@@ -104,13 +107,27 @@ async function sbSignIn(email, password){
 }
 async function sbSignOut(){ const sb=getSB(); if(sb) await sb.auth.signOut(); }
 async function sbGetSession(){ const sb=getSB(); if(!sb) return null; const {data}=await sb.auth.getSession(); return data.session; }
+async function sbGetProfile(userId){ const sb=getSB(); if(!sb) return null; const {data}=await sb.from("profiles").select("*").eq("id",userId).single(); return data; }
+async function sbUpdateProfile(userId, updates){
+  const sb=getSB(); if(!sb) return;
+  const {error}=await sb.from("profiles").update({
+    first_name: updates.first_name||null,
+    last_name: updates.last_name||null,
+    grad_year: updates.grad_year?parseInt(updates.grad_year):null,
+    username: updates.username,
+    display_name: updates.username,
+  }).eq("id",userId);
+  if(error) throw error;
+}
+
+async function sbGetAllMembers(){ const sb=getSB(); if(!sb) return []; const {data}=await sb.from("profiles").select("username,first_name,last_name,grad_year,created_at").order("grad_year",{ascending:true}); return data||[]; }
 
 function makeCode(){ const c="ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; let s=""; for(let i=0;i<6;i++)s+=c[0|Math.random()*c.length]; return s; }
 
 async function sbCreateGame(userId,username,t0,t1){
   const sb=getSB();
   const roomCode=makeCode();
-  const {data:game,error}=await sb.from("games").insert({room_code:roomCode,status:"waiting",team0_name:t0,team1_name:t1,created_by:userId}).select().single();
+  const {data:game,error}=await sb.from("games").insert({room_code:roomCode,status:"waiting",team0_name:t0,team1_name:t1,created_by:userId,is_bot_game:false}).select().single();
   if(error) throw error;
   await sb.from("game_seats").insert({game_id:game.id,seat_index:0,player_id:userId,player_name:username,team_index:0});
   await sb.from("game_state").insert({game_id:game.id,state:{}});
@@ -162,23 +179,79 @@ async function sbFinalizeGame(gameId,winningTeam,t0Score,t1Score){
   await sb.from("games").update({status:"completed",winning_team:winningTeam,team0_score:t0Score,team1_score:t1Score,completed_at:new Date().toISOString()}).eq("id",gameId);
 }
 
-async function sbGetLeaderboard(){
+async function sbGetTeamLeaderboard(includeBots=false){
   const sb=getSB();
-  const {data}=await sb.from("hand_results").select("player_id,player_name,bid,tricks_won,points_earned,points_possible,was_set,was_overbid,bid_accuracy");
-  if(!data) return [];
+  // Get all hand results with teammate info
+  const {data:hrData}=await sb.from("hand_results")
+    .select("player_id,player_name,bid,tricks_won,points_earned,points_possible,was_set,was_overbid,bid_accuracy,game_id,team_index,games(status,is_bot_game,winning_team)");
+  if(!hrData) return [];
+
+  // Group by game, build team pairs
+  const gameMap={};
+  for(const r of hrData){
+    if(!r.games||r.games.status!=="completed") continue;
+    if(!includeBots && r.games.is_bot_game) continue;
+    if(includeBots && !r.games.is_bot_game) continue;
+    if(!gameMap[r.game_id]) gameMap[r.game_id]={rows:[],winningTeam:r.games.winning_team};
+    gameMap[r.game_id].rows.push(r);
+  }
+
+  const teamMap={};
+  for(const [gameId,{rows,winningTeam}] of Object.entries(gameMap)){
+    // Group rows by team_index within this game
+    for(const ti of [0,1]){
+      const teamRows=rows.filter(r=>r.team_index===ti&&r.player_id);
+      if(teamRows.length<2) continue; // skip incomplete/bot teams
+      const ids=teamRows.map(r=>r.player_id).sort();
+      const key=ids.join("|");
+      const names=teamRows.map(r=>r.player_name).sort().join(" & ");
+      if(!teamMap[key]){teamMap[key]={key,names,games:0,wins:0,losses:0,hands:0,total_points:0,sets:0,overbids:0,ba_sum:0,ba_n:0};}
+      const t=teamMap[key];
+      t.games++;
+      if(winningTeam===ti) t.wins++; else t.losses++;
+      for(const r of teamRows){
+        t.hands++;t.total_points+=r.points_earned;
+        if(r.was_set)t.sets++;if(r.was_overbid)t.overbids++;
+        if(r.bid_accuracy!=null){t.ba_sum+=parseFloat(r.bid_accuracy);t.ba_n++;}
+      }
+    }
+  }
+  return Object.values(teamMap).map(t=>({
+    ...t,
+    avg_pts:t.hands>0?t.total_points/t.hands:0,
+    setting_rate:t.hands>0?t.sets/t.hands:0,
+    overbid_rate:t.hands>0?t.overbids/t.hands:0,
+    bid_accuracy:t.ba_n>0?t.ba_sum/t.ba_n:null,
+  }));
+}
+
+async function sbGetLeaderboard(includeBots=false){
+  const sb=getSB();
+  // Only pull hand_results from completed games, with game type info
+  const {data:hrData}=await sb.from("hand_results")
+    .select("player_id,player_name,bid,tricks_won,points_earned,points_possible,was_set,was_overbid,bid_accuracy,game_id,games(status,is_bot_game)");
+  if(!hrData) return [];
+
   const map={};
-  for(const r of data){
+  for(const r of (hrData||[])){
+    // Only count completed games
+    if(!r.games||r.games.status!=="completed") continue;
+    // Filter by bot/multiplayer toggle
+    if(!includeBots && r.games.is_bot_game) continue;
+    if(includeBots && !r.games.is_bot_game) continue;
     if(!map[r.player_id]){map[r.player_id]={player_id:r.player_id,player_name:r.player_name,hands:0,total_points:0,sets:0,overbids:0,ba_sum:0,ba_n:0};}
     const p=map[r.player_id];
     p.hands++;p.total_points+=r.points_earned;
     if(r.was_set)p.sets++;if(r.was_overbid)p.overbids++;
     if(r.bid_accuracy!==null){p.ba_sum+=parseFloat(r.bid_accuracy);p.ba_n++;}
   }
-  // Win/loss
-  const {data:gs}=await sb.from("game_seats").select("player_id,team_index,game_id,games(winning_team,status)");
+  // Win/loss — only completed games of correct type
+  const {data:gs}=await sb.from("game_seats").select("player_id,team_index,game_id,games(winning_team,status,is_bot_game)");
   const wm={};
   for(const row of(gs||[])){
-    if(!row.games||row.games.status!=="completed")continue;
+    if(!row.games||row.games.status!=="completed") continue;
+    if(!includeBots && row.games.is_bot_game) continue;
+    if(includeBots && !row.games.is_bot_game) continue;
     if(!wm[row.player_id])wm[row.player_id]={w:0,l:0,g:0};
     wm[row.player_id].g++;
     if(row.games.winning_team===row.team_index)wm[row.player_id].w++;else wm[row.player_id].l++;
@@ -323,6 +396,155 @@ function ArcHand({cards,onReorder,canDrag,stagedId}){
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// PROFILE EDIT PAGE
+// ─────────────────────────────────────────────────────────────────────────────
+function ProfilePage({user, onBack, onSave}){
+  const[firstName,setFN]=useState(user?.first_name||"");
+  const[lastName,setLN]=useState(user?.last_name||"");
+  const[gradYear,setGY]=useState(user?.grad_year?String(user.grad_year):"");
+  const[username,setUN]=useState(user?.username||"");
+  const[saving,setSaving]=useState(false);
+  const[saved,setSaved]=useState(false);
+  const[err,setErr]=useState("");
+
+  const isIncomplete=!user?.first_name||!user?.last_name||!user?.grad_year;
+
+  async function save(){
+    if(!username.trim()){setErr("Username is required");return;}
+    setSaving(true);setErr("");
+    try{
+      await sbUpdateProfile(user.id,{first_name:firstName.trim(),last_name:lastName.trim(),grad_year:gradYear,username:username.trim()});
+      setSaved(true);
+      onSave({...user,first_name:firstName.trim(),last_name:lastName.trim(),grad_year:gradYear?parseInt(gradYear):null,username:username.trim()});
+      setTimeout(()=>setSaved(false),2500);
+    }catch(e){setErr(e.message||"Save failed");}
+    setSaving(false);
+  }
+
+  const inp={width:"100%",boxSizing:"border-box",background:"#fff",border:"2px solid #c8b880",borderRadius:8,padding:"10px 14px",color:"#111",fontFamily:"Georgia,serif",fontSize:14,outline:"none"};
+  const lbl={color:"#5a4a2a",fontSize:11,letterSpacing:1,marginBottom:5,fontWeight:700,display:"block"};
+
+  return(
+    <div style={{minHeight:"100vh",background:"#1a1a2e",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Georgia,serif",backgroundImage:"radial-gradient(ellipse at 50% 30%, #2a2a4e, #0a0a1e)"}}>
+      <div style={{width:440,padding:36,background:"rgba(255,255,255,.96)",borderRadius:18,boxShadow:"0 10px 40px rgba(0,0,0,.4)"}}>
+        <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:24}}>
+          <button onClick={onBack} style={{background:"none",border:"1.5px solid #ccc",borderRadius:7,padding:"5px 12px",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:12,color:"#666"}}>← Back</button>
+          <div>
+            <div style={{fontSize:20,fontWeight:700}}>My Profile</div>
+            {isIncomplete&&<div style={{fontSize:11,color:"#c06020",marginTop:2}}>⚠ Please complete your profile</div>}
+          </div>
+        </div>
+
+        {isIncomplete&&(
+          <div style={{background:"#fff8f0",border:"1.5px solid #f0c080",borderRadius:10,padding:"10px 14px",marginBottom:20,fontSize:12,color:"#8a5010"}}>
+            Your profile is missing some information. Please fill in the fields below so you appear correctly on the Members page and leaderboard.
+          </div>
+        )}
+
+        <div style={{display:"flex",gap:10,marginBottom:16}}>
+          <div style={{flex:1}}>
+            <label style={lbl}>FIRST NAME</label>
+            <input value={firstName} onChange={e=>setFN(e.target.value)} placeholder="Nate" style={inp}/>
+          </div>
+          <div style={{flex:1}}>
+            <label style={lbl}>LAST NAME</label>
+            <input value={lastName} onChange={e=>setLN(e.target.value)} placeholder="Jackson" style={inp}/>
+          </div>
+        </div>
+
+        <div style={{display:"flex",gap:10,marginBottom:16}}>
+          <div style={{flex:1}}>
+            <label style={lbl}>USERNAME <span style={{color:"#aaa",fontWeight:400,fontSize:10}}>(shown in games)</span></label>
+            <input value={username} onChange={e=>setUN(e.target.value)} placeholder="e.g. Dewski" style={inp}/>
+          </div>
+          <div style={{flex:1}}>
+            <label style={lbl}>GRAD YEAR</label>
+            <input value={gradYear} onChange={e=>setGY(e.target.value)} placeholder="e.g. 2018" maxLength={4} style={inp}/>
+          </div>
+        </div>
+
+        {err&&<div style={{color:"#c02020",fontSize:12,marginBottom:10}}>{err}</div>}
+
+        <button onClick={save} disabled={saving} style={{width:"100%",background:saved?"#28a028":"linear-gradient(135deg,#2a5e2a,#48904a)",border:"none",borderRadius:10,padding:"13px",color:"#fff",fontWeight:700,cursor:saving?"wait":"pointer",fontFamily:"Georgia,serif",fontSize:15,transition:"background .3s"}}>
+          {saved?"✓ Saved!":saving?"Saving…":"Save Profile"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MEMBERS PAGE
+// ─────────────────────────────────────────────────────────────────────────────
+function MembersPage({onBack}){
+  const[members,setMembers]=useState([]);const[loading,setLoading]=useState(true);
+  const[sortKey,setSortKey]=useState("grad_year");const[sortDir,setSortDir]=useState(1);
+
+  useEffect(()=>{
+    sbGetAllMembers().then(d=>{setMembers(d||[]);setLoading(false);}).catch(()=>setLoading(false));
+  },[]);
+
+  function sort(key){if(sortKey===key)setSortDir(d=>-d);else{setSortKey(key);setSortDir(1);}}
+  const sorted=[...members].sort((a,b)=>{
+    const av=a[sortKey]??'',bv=b[sortKey]??'';
+    return typeof av==="number"?(av-bv)*sortDir:String(av).localeCompare(String(bv))*sortDir;
+  });
+
+  const COLS=[
+    {key:"username",label:"Username"},
+    {key:"first_name",label:"First Name"},
+    {key:"last_name",label:"Last Name"},
+    {key:"grad_year",label:"Class"},
+  ];
+
+  return(
+    <div style={{minHeight:"100vh",background:"#1a1a2e",fontFamily:"Georgia,serif",padding:"20px 16px"}}>
+      <div style={{maxWidth:700,margin:"0 auto"}}>
+        <div style={{display:"flex",alignItems:"center",gap:16,marginBottom:28}}>
+          <button onClick={onBack} style={Sb.hBtn}>← Back</button>
+          <div>
+            <div style={{color:"#f0e6c8",fontSize:24,fontWeight:700,letterSpacing:3}}>MEMBERS</div>
+            <div style={{color:"rgba(255,255,255,.4)",fontSize:11,letterSpacing:2}}>{members.length} registered players</div>
+          </div>
+        </div>
+        {loading?(
+          <div style={{color:"rgba(255,255,255,.5)",textAlign:"center",padding:40}}>Loading…</div>
+        ):(
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+              <thead>
+                <tr>
+                  {COLS.map(col=>(
+                    <th key={col.key} onClick={()=>sort(col.key)}
+                      style={{textAlign:"left",padding:"10px 12px",color:sortKey===col.key?"#f0d060":"rgba(255,255,255,.6)",
+                        fontSize:10,letterSpacing:1,cursor:"pointer",borderBottom:"1px solid rgba(255,255,255,.1)",
+                        background:"rgba(255,255,255,.04)",whiteSpace:"nowrap",userSelect:"none"}}>
+                      {col.label}{sortKey===col.key?(sortDir===1?" ▲":" ▼"):""}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.map((row,i)=>(
+                  <tr key={row.username} style={{background:i%2===0?"transparent":"rgba(255,255,255,.03)"}}>
+                    {COLS.map(col=>(
+                      <td key={col.key} style={{padding:"9px 12px",color:"rgba(255,255,255,.85)",borderBottom:"1px solid rgba(255,255,255,.06)"}}>
+                        {row[col.key]??"—"}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+                {!sorted.length&&<tr><td colSpan={4} style={{padding:32,textAlign:"center",color:"rgba(255,255,255,.35)"}}>No members yet.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // STATS PAGE
 // ─────────────────────────────────────────────────────────────────────────────
 const STAT_COLS = [
@@ -340,12 +562,28 @@ const STAT_COLS = [
 function StatsPage({onBack}){
   const[data,setData]=useState([]);const[loading,setLoading]=useState(true);
   const[sortKey,setSortKey]=useState("wins");const[sortDir,setSortDir]=useState(-1);
+  const[showBots,setShowBots]=useState(false);
+  const[view,setView]=useState("individual"); // individual | team
 
   useEffect(()=>{
-    sbGetLeaderboard().then(d=>{ setData(d); setLoading(false); }).catch(()=>setLoading(false));
-  },[]);
+    setLoading(true);
+    const fn=view==="team"?sbGetTeamLeaderboard:sbGetLeaderboard;
+    fn(showBots).then(d=>{ setData(d); setLoading(false); }).catch(()=>setLoading(false));
+  },[showBots,view]);
 
   function sort(key){ if(sortKey===key)setSortDir(d=>-d); else{setSortKey(key);setSortDir(-1);} }
+
+  const TEAM_COLS=[
+    {key:"names",label:"Team",fmt:v=>v},
+    {key:"games",label:"Games",fmt:v=>v},
+    {key:"wins",label:"Wins",fmt:v=>v},
+    {key:"losses",label:"Losses",fmt:v=>v},
+    {key:"avg_pts",label:"Avg Pts/Hand",fmt:v=>fmt1(v)},
+    {key:"bid_accuracy",label:"Bid Accuracy",fmt:v=>v!=null?pct(v):"—"},
+    {key:"overbid_rate",label:"Overbid Rate",fmt:v=>pct(v)},
+    {key:"setting_rate",label:"Setting Rate",fmt:v=>pct(v)},
+  ];
+  const cols=view==="team"?TEAM_COLS:STAT_COLS;
 
   const sorted=[...data].sort((a,b)=>{
     const av=a[sortKey]??-Infinity,bv=b[sortKey]??-Infinity;
@@ -355,11 +593,21 @@ function StatsPage({onBack}){
   return(
     <div style={{minHeight:"100vh",background:"#1a1a2e",fontFamily:"Georgia,serif",padding:"20px 16px"}}>
       <div style={{maxWidth:900,margin:"0 auto"}}>
-        <div style={{display:"flex",alignItems:"center",gap:16,marginBottom:28}}>
+        <div style={{display:"flex",alignItems:"center",gap:16,marginBottom:28,flexWrap:"wrap"}}>
           <button onClick={onBack} style={Sb.hBtn}>← Back</button>
-          <div>
+          <div style={{flex:1}}>
             <div style={{color:"#f0e6c8",fontSize:24,fontWeight:700,letterSpacing:3}}>OKIE LEADERBOARD</div>
             <div style={{color:"rgba(255,255,255,.4)",fontSize:11,letterSpacing:2}}>Click column headers to sort</div>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:6,alignItems:"flex-end"}}>
+            <div style={{display:"flex",gap:0,borderRadius:8,overflow:"hidden",border:"1.5px solid rgba(255,255,255,.2)"}}>
+              <button onClick={()=>setView("individual")} style={{padding:"6px 14px",border:"none",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:12,fontWeight:700,background:view==="individual"?"#f0e6c8":"rgba(255,255,255,.08)",color:view==="individual"?"#1a1a2e":"rgba(255,255,255,.5)"}}>Individual</button>
+              <button onClick={()=>setView("team")} style={{padding:"6px 14px",border:"none",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:12,fontWeight:700,background:view==="team"?"#f0e6c8":"rgba(255,255,255,.08)",color:view==="team"?"#1a1a2e":"rgba(255,255,255,.5)"}}>Teams</button>
+            </div>
+            <div style={{display:"flex",gap:0,borderRadius:8,overflow:"hidden",border:"1.5px solid rgba(255,255,255,.15)"}}>
+              <button onClick={()=>setShowBots(false)} style={{padding:"5px 12px",border:"none",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:11,fontWeight:700,background:!showBots?"rgba(255,255,255,.2)":"rgba(255,255,255,.05)",color:!showBots?"#f0e6c8":"rgba(255,255,255,.35)"}}>Multiplayer</button>
+              <button onClick={()=>setShowBots(true)} style={{padding:"5px 12px",border:"none",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:11,fontWeight:700,background:showBots?"rgba(255,255,255,.2)":"rgba(255,255,255,.05)",color:showBots?"#f0e6c8":"rgba(255,255,255,.35)"}}>vs Bots</button>
+            </div>
           </div>
         </div>
         {loading?(
@@ -369,7 +617,7 @@ function StatsPage({onBack}){
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
               <thead>
                 <tr>
-                  {STAT_COLS.map(col=>(
+                  {cols.map(col=>(
                     <th key={col.key} onClick={()=>sort(col.key)}
                       style={{textAlign:"left",padding:"10px 12px",color:sortKey===col.key?"#f0d060":"rgba(255,255,255,.6)",
                         fontSize:10,letterSpacing:1,cursor:"pointer",borderBottom:"1px solid rgba(255,255,255,.1)",
@@ -381,15 +629,15 @@ function StatsPage({onBack}){
               </thead>
               <tbody>
                 {sorted.map((row,i)=>(
-                  <tr key={row.player_id} style={{background:i%2===0?"transparent":"rgba(255,255,255,.03)"}}>
-                    {STAT_COLS.map(col=>(
+                  <tr key={row.player_id||row.key} style={{background:i%2===0?"transparent":"rgba(255,255,255,.03)"}}>
+                    {cols.map(col=>(
                       <td key={col.key} style={{padding:"9px 12px",color:"rgba(255,255,255,.85)",borderBottom:"1px solid rgba(255,255,255,.06)"}}>
                         {col.fmt(row[col.key])}
                       </td>
                     ))}
                   </tr>
                 ))}
-                {!sorted.length&&<tr><td colSpan={STAT_COLS.length} style={{padding:32,textAlign:"center",color:"rgba(255,255,255,.35)"}}>No games recorded yet.</td></tr>}
+                {!sorted.length&&<tr><td colSpan={cols.length} style={{padding:32,textAlign:"center",color:"rgba(255,255,255,.35)"}}>No games recorded yet.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -422,11 +670,18 @@ function StatsPage({onBack}){
 // ─────────────────────────────────────────────────────────────────────────────
 function LobbyPage({gameId,roomCode,seats,currentUserId,onGameStart,tNames,onBack}){
   const filled=seats.filter(s=>s.player_id);
-  const allFilled=filled.length===4;
+  const emptySeatIds=[0,1,2,3].filter(i=>!seats.find(s=>s.seat_index===i&&s.player_id));
+  // botSeats: set of seat indices assigned to bots
+  const[botSeats,setBotSeats]=useState(new Set());
+  const[botNames,setBotNames]=useState({0:"Bot 1",1:"Bot 2",2:"Bot 3",3:"Bot 4"});
+  const readyToStart=emptySeatIds.every(i=>botSeats.has(i));
   const[copied,setCopied]=useState(false);
   const pageUrl=window.location.href;
   const shareText=`Join my Okie game!\nURL: ${pageUrl}\nRoom code: ${roomCode}`;
 
+  function toggleBot(seatIdx){
+    setBotSeats(prev=>{const n=new Set(prev);if(n.has(seatIdx))n.delete(seatIdx);else n.add(seatIdx);return n;});
+  }
   function copyInvite(){
     navigator.clipboard.writeText(shareText).then(()=>{setCopied(true);setTimeout(()=>setCopied(false),2500);});
   }
@@ -465,16 +720,29 @@ function LobbyPage({gameId,roomCode,seats,currentUserId,onGameStart,tNames,onBac
               <div style={{color:tc(ti),fontSize:10,letterSpacing:1,fontWeight:700,marginBottom:8}}>{tNames[ti].toUpperCase()}</div>
               {(ti===0?[0,2]:[1,3]).map(actualSeat=>{
                 const seat=seats.find(s=>s.seat_index===actualSeat);
+                const isBot=botSeats.has(actualSeat);
+                const isEmpty=!seat?.player_id;
                 return(
-                  <div key={actualSeat} style={{display:"flex",alignItems:"center",gap:6,padding:"6px 8px",marginBottom:4,background:"rgba(255,255,255,.7)",borderRadius:7,border:seat?.player_id?`1.5px solid ${tc(ti)}44`:"1.5px dashed #ddd"}}>
-                    <div style={{width:28,height:28,borderRadius:"50%",background:seat?.player_id?tc(ti):"#eee",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:"#fff",fontWeight:700}}>
-                      {seat?.player_name?seat.player_name[0].toUpperCase():"?"}
+                  <div key={actualSeat} style={{padding:"6px 8px",marginBottom:4,background:"rgba(255,255,255,.7)",borderRadius:7,border:seat?.player_id?`1.5px solid ${tc(ti)}44`:isBot?`1.5px solid #888`:"1.5px dashed #ddd"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:6}}>
+                      <div style={{width:28,height:28,borderRadius:"50%",background:seat?.player_id?tc(ti):isBot?"#666":"#eee",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:"#fff",fontWeight:700}}>
+                        {seat?.player_name?seat.player_name[0].toUpperCase():isBot?"🤖":"?"}
+                      </div>
+                      <div style={{flex:1}}>
+                        {isEmpty&&isBot
+                          ? <input value={botNames[actualSeat]} onChange={e=>setBotNames(n=>({...n,[actualSeat]:e.target.value}))}
+                              style={{width:"100%",background:"none",border:"none",borderBottom:"1px solid #aaa",fontFamily:"Georgia,serif",fontSize:12,fontWeight:700,color:"#333",outline:"none",padding:"1px 0"}}/>
+                          : <div style={{fontSize:12,fontWeight:700,color:"#111"}}>{seat?.player_name||"Empty"}</div>
+                        }
+                        <div style={{fontSize:9,color:"#aaa"}}>Seat {actualSeat+1}{actualSeat===0?" · You":""}</div>
+                      </div>
+                      {seat?.player_id===currentUserId&&<span style={{fontSize:9,color:tc(ti),fontWeight:700}}>YOU</span>}
+                      {isEmpty&&seats.find(s=>s.seat_index===0)?.player_id===currentUserId&&(
+                        <button onClick={()=>toggleBot(actualSeat)} style={{fontSize:10,padding:"3px 8px",borderRadius:5,border:`1px solid ${isBot?"#888":"#ccc"}`,background:isBot?"#555":"#fff",color:isBot?"#fff":"#888",cursor:"pointer",fontFamily:"Georgia,serif",fontWeight:700,whiteSpace:"nowrap"}}>
+                          {isBot?"🤖 Bot":"+ Bot"}
+                        </button>
+                      )}
                     </div>
-                    <div>
-                      <div style={{fontSize:12,fontWeight:700,color:"#111"}}>{seat?.player_name||"Empty"}</div>
-                      <div style={{fontSize:9,color:"#aaa"}}>Seat {actualSeat+1}{actualSeat===0?" · You":""}</div>
-                    </div>
-                    {seat?.player_id===currentUserId&&<span style={{marginLeft:"auto",fontSize:9,color:tc(ti),fontWeight:700}}>YOU</span>}
                   </div>
                 );
               })}
@@ -482,18 +750,23 @@ function LobbyPage({gameId,roomCode,seats,currentUserId,onGameStart,tNames,onBac
           ))}
         </div>
 
-        <div style={{color:"#999",fontSize:11,textAlign:"center",marginBottom:16}}>{filled.length}/4 players joined{allFilled?" — ready to deal!":""}</div>
+        <div style={{color:"#999",fontSize:11,textAlign:"center",marginBottom:16}}>
+          {filled.length}/4 players · {botSeats.size} bot{botSeats.size!==1?"s":""} assigned
+          {readyToStart?" — ready to deal!":""}
+        </div>
 
-        {allFilled&&seats.find(s=>s.seat_index===0)?.player_id===currentUserId&&(
-          <button onClick={onGameStart} style={{width:"100%",background:"linear-gradient(135deg,#2a5e2a,#48904a)",border:"none",borderRadius:10,padding:"13px",color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"Georgia,serif",fontSize:16,boxShadow:"0 4px 14px rgba(0,0,0,.22)"}}>
+        {readyToStart&&seats.find(s=>s.seat_index===0)?.player_id===currentUserId&&(
+          <button onClick={()=>onGameStart(botSeats,botNames)} style={{width:"100%",background:"linear-gradient(135deg,#2a5e2a,#48904a)",border:"none",borderRadius:10,padding:"13px",color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"Georgia,serif",fontSize:16,boxShadow:"0 4px 14px rgba(0,0,0,.22)"}}>
             Deal Cards →
           </button>
         )}
-        {allFilled&&seats.find(s=>s.seat_index===0)?.player_id!==currentUserId&&(
+        {readyToStart&&seats.find(s=>s.seat_index===0)?.player_id!==currentUserId&&(
           <div style={{textAlign:"center",color:"#888",fontSize:13}}>Waiting for Seat 1 player to deal…</div>
         )}
-        {!allFilled&&(
-          <div style={{color:"#aaa",fontSize:11,textAlign:"center"}}>Waiting for {4-filled.length} more player{4-filled.length!==1?"s":""}…</div>
+        {!readyToStart&&(
+          <div style={{color:"#aaa",fontSize:11,textAlign:"center"}}>
+            {emptySeatIds.length-botSeats.size} seat{emptySeatIds.size-botSeats.size!==1?"s":""} still need a player or bot
+          </div>
         )}
       </div>
     </div>
@@ -880,12 +1153,15 @@ function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,on
 // MAIN APP (Auth + Routing)
 // ─────────────────────────────────────────────────────────────────────────────
 export default function OkieApp(){
-  const[screen,setScreen]=useState("auth");     // auth | menu | create | join | lobby | game | stats
+  const[screen,setScreen]=useState("auth");     // auth | menu | create | join | lobby | game | stats | members | profile
   const[user,setUser]=useState(null);
   const[authMode,setAuthMode]=useState("login");// login | signup
   const[authUser,setAuthU]=useState("");
   const[authEmail,setAuthE]=useState("");
   const[authPass,setAuthP]=useState("");
+  const[authFirst,setAuthFirst]=useState("");
+  const[authLast,setAuthLast]=useState("");
+  const[authGrad,setAuthGrad]=useState("");
   const[authErr,setAuthErr]=useState("");
   const[authLoading,setAuthL]=useState(false);
   const[gameData,setGD]=useState(null);         // {game, seats, gs}
@@ -907,10 +1183,12 @@ export default function OkieApp(){
   // Restore session
   useEffect(()=>{
     if(!sbReady)return;
-    sbGetSession().then(session=>{
+    sbGetSession().then(async session=>{
       if(session?.user){
         const meta=session.user.user_metadata;
-        setUser({id:session.user.id,username:meta?.username||session.user.email?.split("@")[0]});
+        const profile=await sbGetProfile(session.user.id);
+        setUser({id:session.user.id,username:profile?.username||meta?.username||session.user.email?.split("@")[0],first_name:profile?.first_name,last_name:profile?.last_name,grad_year:profile?.grad_year});
+        setScreen("menu");
       }
     });
   },[sbReady]);
@@ -936,9 +1214,16 @@ export default function OkieApp(){
     setAuthErr("");setAuthL(true);
     try{
       let u;
-      if(authMode==="signup") u=await sbSignUp(authUser,authEmail,authPass);
+      if(authMode==="signup") u=await sbSignUp(authUser,authEmail,authPass,authFirst,authLast,authGrad);
       else u=await sbSignIn(authEmail,authPass);
-      if(u){setUser({id:u.id,username:u.user_metadata?.username||authUser});setScreen("menu");}
+      if(u){
+        const profile=await sbGetProfile(u.id);
+        const updatedUser={id:u.id,username:profile?.username||u.user_metadata?.username||authUser,first_name:profile?.first_name,last_name:profile?.last_name,grad_year:profile?.grad_year};
+        setUser(updatedUser);
+        // Send to profile page if any required fields are missing
+        const incomplete=!updatedUser.first_name||!updatedUser.last_name||!updatedUser.grad_year;
+        setScreen(incomplete?"profile":"menu");
+      }
     }catch(e){ setAuthErr(e.message||"Auth failed"); }
     setAuthL(false);
   }
@@ -980,12 +1265,18 @@ export default function OkieApp(){
     }catch(e){ alert("Error joining: "+e.message); }
   }
 
-  function handleLobbyStart(){
+  function handleLobbyStart(botSeats, botNames){
     if(!gameData?.game)return;
     const seats=gameData.seats||[];
-    const players=seats.sort((a,b)=>a.seat_index-b.seat_index).map(s=>({
-      id:`p${s.seat_index}`,name:s.player_name,isBot:false,userId:s.player_id
-    }));
+    // Build full 4-player list, filling empty seats with bots
+    const players=[0,1,2,3].map(i=>{
+      const seat=seats.find(s=>s.seat_index===i);
+      if(seat?.player_id) return{id:`p${i}`,name:seat.player_name,isBot:false,userId:seat.player_id};
+      return{id:`p${i}`,name:botNames?.[i]||`Bot ${i+1}`,isBot:true,userId:null};
+    });
+    const hasBots=players.some(p=>p.isBot);
+    // Mark game as bot game if any bots present
+    if(hasBots) getSB()?.from("games").update({is_bot_game:true}).eq("id",gameData.game.id).then(()=>{});
     const gs=initHand({players,dealer:0,handIndex:0,scores:Object.fromEntries(players.map(p=>[p.id,0])),handScoreLog:[]});
     sbPushState(gameData.game.id,gs).catch(()=>{});
     setMyGs(gs);setScreen("game");
@@ -1014,11 +1305,32 @@ export default function OkieApp(){
           <input value={authEmail} onChange={e=>setAuthE(e.target.value)} onKeyDown={e=>e.key==="Enter"&&doAuth()} placeholder="your@email.com" type="email"
             style={{width:"100%",boxSizing:"border-box",background:"#fff",border:"2px solid #c8b880",borderRadius:8,padding:"10px 14px",color:"#111",fontFamily:"Georgia,serif",fontSize:14,outline:"none"}}/>
         </div>
-        {authMode==="signup"&&<div style={{marginBottom:14}}>
-          <div style={{color:"#5a4a2a",fontSize:11,letterSpacing:1,marginBottom:5,fontWeight:700}}>USERNAME <span style={{color:"#aaa",fontWeight:400,fontSize:10}}>(shown to other players)</span></div>
-          <input value={authUser} onChange={e=>setAuthU(e.target.value)} onKeyDown={e=>e.key==="Enter"&&doAuth()} placeholder="e.g. Dewski"
-            style={{width:"100%",boxSizing:"border-box",background:"#fff",border:"2px solid #c8b880",borderRadius:8,padding:"10px 14px",color:"#111",fontFamily:"Georgia,serif",fontSize:14,outline:"none"}}/>
-        </div>}
+        {authMode==="signup"&&<>
+          <div style={{display:"flex",gap:10,marginBottom:14}}>
+            <div style={{flex:1}}>
+              <div style={{color:"#5a4a2a",fontSize:11,letterSpacing:1,marginBottom:5,fontWeight:700}}>FIRST NAME</div>
+              <input value={authFirst} onChange={e=>setAuthFirst(e.target.value)} placeholder="Nate"
+                style={{width:"100%",boxSizing:"border-box",background:"#fff",border:"2px solid #c8b880",borderRadius:8,padding:"10px 14px",color:"#111",fontFamily:"Georgia,serif",fontSize:14,outline:"none"}}/>
+            </div>
+            <div style={{flex:1}}>
+              <div style={{color:"#5a4a2a",fontSize:11,letterSpacing:1,marginBottom:5,fontWeight:700}}>LAST NAME</div>
+              <input value={authLast} onChange={e=>setAuthLast(e.target.value)} placeholder="Jackson"
+                style={{width:"100%",boxSizing:"border-box",background:"#fff",border:"2px solid #c8b880",borderRadius:8,padding:"10px 14px",color:"#111",fontFamily:"Georgia,serif",fontSize:14,outline:"none"}}/>
+            </div>
+          </div>
+          <div style={{display:"flex",gap:10,marginBottom:14}}>
+            <div style={{flex:1}}>
+              <div style={{color:"#5a4a2a",fontSize:11,letterSpacing:1,marginBottom:5,fontWeight:700}}>USERNAME <span style={{color:"#aaa",fontWeight:400,fontSize:10}}>(shown in games)</span></div>
+              <input value={authUser} onChange={e=>setAuthU(e.target.value)} placeholder="e.g. Dewski"
+                style={{width:"100%",boxSizing:"border-box",background:"#fff",border:"2px solid #c8b880",borderRadius:8,padding:"10px 14px",color:"#111",fontFamily:"Georgia,serif",fontSize:14,outline:"none"}}/>
+            </div>
+            <div style={{flex:1}}>
+              <div style={{color:"#5a4a2a",fontSize:11,letterSpacing:1,marginBottom:5,fontWeight:700}}>GRAD YEAR</div>
+              <input value={authGrad} onChange={e=>setAuthGrad(e.target.value)} placeholder="e.g. 2018" maxLength={4}
+                style={{width:"100%",boxSizing:"border-box",background:"#fff",border:"2px solid #c8b880",borderRadius:8,padding:"10px 14px",color:"#111",fontFamily:"Georgia,serif",fontSize:14,outline:"none"}}/>
+            </div>
+          </div>
+        </>}
         <div style={{marginBottom:6}}>
           <div style={{color:"#5a4a2a",fontSize:11,letterSpacing:1,marginBottom:5,fontWeight:700}}>PASSWORD</div>
           <input type="password" value={authPass} onChange={e=>setAuthP(e.target.value)} onKeyDown={e=>e.key==="Enter"&&doAuth()} placeholder="password"
@@ -1040,13 +1352,18 @@ export default function OkieApp(){
         <div style={{textAlign:"center",marginBottom:28}}>
           <img src={CREST} alt="OXi" style={{width:64,height:88,objectFit:"cover",borderRadius:6,marginBottom:10,boxShadow:"0 3px 12px rgba(0,0,0,.2)"}}/>
           <div style={{fontSize:44,fontWeight:700,letterSpacing:5,lineHeight:1}}>OKIE</div>
-          <div style={{color:"#6a5a3a",fontSize:11,letterSpacing:3}}>Welcome, {user?.username}</div>
+          <div style={{color:"#6a5a3a",fontSize:11,letterSpacing:3}}>Welcome, {user?.first_name||user?.username}</div>
         </div>
         <div style={{display:"flex",flexDirection:"column",gap:10}}>
           <button onClick={()=>setScreen("create")} style={Sb.menuBtn("#2a5e2a","#48904a")}>🃏  Create Game (Multiplayer)</button>
           <button onClick={()=>setScreen("join")} style={Sb.menuBtn("#1a4a7a","#2a7ab0")}>🔗  Join Game by Code</button>
           <button onClick={()=>setScreen("solo")} style={Sb.menuBtn("#4a3a1a","#7a6a3a")}>🤖  Solo vs Bots</button>
           <button onClick={()=>setScreen("stats")} style={Sb.menuBtn("#3a1a4a","#6a3a7a")}>📊  Leaderboard & Stats</button>
+          <button onClick={()=>setScreen("members")} style={Sb.menuBtn("#1a3a4a","#2a6a7a")}>👥  Members</button>
+          <button onClick={()=>setScreen("profile")} style={{...Sb.menuBtn("#3a2a1a","#6a4a2a"),display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+            <span>⚙️  My Profile</span>
+            {(!user?.first_name||!user?.last_name||!user?.grad_year)&&<span style={{background:"#e07020",borderRadius:10,padding:"2px 8px",fontSize:10,fontWeight:700}}>Incomplete</span>}
+          </button>
         </div>
         <button onClick={()=>{sbSignOut();setUser(null);setScreen("auth");}} style={{width:"100%",marginTop:16,background:"none",border:"1.5px solid #ddd",borderRadius:10,padding:"9px",color:"#999",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:13}}>Sign Out</button>
       </div>
@@ -1143,6 +1460,12 @@ export default function OkieApp(){
 
   // ── STATS ──
   if(screen==="stats") return <StatsPage onBack={()=>setScreen("menu")}/>;
+
+  // ── MEMBERS ──
+  if(screen==="members") return <MembersPage onBack={()=>setScreen("menu")}/>;
+
+  // ── PROFILE ──
+  if(screen==="profile") return <ProfilePage user={user} onBack={()=>setScreen("menu")} onSave={updatedUser=>{setUser(updatedUser);setScreen("menu");}}/>;
 
   return null;
 }
