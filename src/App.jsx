@@ -1215,17 +1215,9 @@ function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,on
             </div>
           </div>
 
-          {/* ── BOTTOM: My panel + bid panel (if bidding) + hand ── */}
+          {/* ── BOTTOM: bid panel (if bidding) + hand ── */}
           <div style={{flexShrink:0,paddingBottom:4}}>
-            {/* My name badge */}
-            <div style={{display:"flex",justifyContent:"center",marginBottom:5}}>
-              <PlayerPanel position="top"
-                player={players[viewAs]} bid={bids[players[viewAs]?.id]} made={made[players[viewAs]?.id]||0}
-                isDealer={dealer===viewAs} isTurn={isTurn(viewAs)}
-                score={scores[players[viewAs]?.id]||0} teamCol={tc(tOf(viewAs))}
-                cardCount={myHand.length}/>
-            </div>
-            {/* Bid panels — BELOW my name badge, ABOVE my hand */}
+            {/* Bid panels — above my hand */}
             {!pendingTrick&&phase==="BIDDING_INITIAL"&&players[currentBidder]?.id===players[viewAs]?.id&&(
               <div style={{display:"flex",justifyContent:"center",marginBottom:6}}>
                 <BidPanel min={Math.max(rule.minBid,(highBid||0)+1)} max={rule.cards} isInitial onBid={humanBid}/>
@@ -1252,6 +1244,16 @@ function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,on
 
         </div>
       </div>
+
+      {/* ── MY PLAYER PANEL: fixed bottom-right, never overlaps anything ── */}
+      <div style={{position:"fixed",bottom:16,right:16,zIndex:50}}>
+        <PlayerPanel position="top"
+          player={players[viewAs]} bid={bids[players[viewAs]?.id]} made={made[players[viewAs]?.id]||0}
+          isDealer={dealer===viewAs} isTurn={isTurn(viewAs)}
+          score={scores[players[viewAs]?.id]||0} teamCol={tc(tOf(viewAs))}
+          cardCount={myHand.length}/>
+      </div>
+
     </div>
   );
 }
