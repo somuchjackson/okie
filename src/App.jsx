@@ -1105,9 +1105,9 @@ function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,on
         </div>}
 
         {/* Main table area */}
-        <div style={{flex:1,display:"flex",flexDirection:"column",minWidth:0,padding:"12px 20px 8px",gap:8}}>
+        <div style={{flex:1,display:"flex",flexDirection:"column",minWidth:0,padding:"8px 16px 6px",gap:6}}>
 
-          {/* ── TOP: Partner ── */}
+          {/* ── TOP: Partner panel ── */}
           <div style={{display:"flex",justifyContent:"center",flexShrink:0}}>
             <PlayerPanel position="top"
               player={players[partIdx]} bid={bids[players[partIdx]?.id]} made={made[players[partIdx]?.id]||0}
@@ -1116,11 +1116,11 @@ function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,on
               cardCount={gs.hands[players[partIdx]?.id]?.length||0}/>
           </div>
 
-          {/* ── MIDDLE ROW: left player | trick area + action | right player ── */}
-          <div style={{flex:1,display:"flex",alignItems:"center",gap:16,minHeight:0}}>
+          {/* ── MIDDLE ROW ── */}
+          <div style={{flex:1,display:"flex",alignItems:"center",gap:12,minHeight:0}}>
 
-            {/* Left player */}
-            <div style={{flexShrink:0}}>
+            {/* Left player — vertically centered */}
+            <div style={{flexShrink:0,alignSelf:"center"}}>
               <PlayerPanel position="side"
                 player={players[leftIdx]} bid={bids[players[leftIdx]?.id]} made={made[players[leftIdx]?.id]||0}
                 isDealer={dealer===leftIdx} isTurn={isTurn(leftIdx)}
@@ -1128,51 +1128,48 @@ function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,on
                 cardCount={gs.hands[players[leftIdx]?.id]?.length||0}/>
             </div>
 
-            {/* ── CENTER: trick zone + action area ── */}
-            <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:10,minWidth:0}}>
+            {/* ── CENTER COLUMN: status + trick zone only ── */}
+            <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:6,minWidth:0}}>
 
-              {/* Status banner — only show when not bidding (bid panel replaces it) */}
+              {/* Status banner — hidden during bidding turns */}
               {!(isMyBidTurn&&(phase==="BIDDING_INITIAL"||phase==="BIDDING_OTHERS"||phase==="SET_TRUMP"))&&(
-                <div style={{background:"rgba(0,0,0,.5)",backdropFilter:"blur(4px)",borderRadius:20,padding:"6px 20px",
-                  color:pendingTrick?"#60e060":isMyTurn?"#f0e060":"rgba(255,255,255,.8)",
-                  fontSize:13,fontWeight:600,textAlign:"center",border:"1px solid rgba(255,255,255,.1)"}}>
+                <div style={{background:"rgba(0,0,0,.5)",backdropFilter:"blur(4px)",borderRadius:20,padding:"5px 18px",
+                  color:pendingTrick?"#60e060":isMyTurn?"#f0e060":"rgba(255,255,255,.75)",
+                  fontSize:12,fontWeight:600,textAlign:"center",border:"1px solid rgba(255,255,255,.1)"}}>
                   {status}
                 </div>
               )}
 
-              {/* ── TRICK AREA ── */}
+              {/* ── TRICK ZONE ── */}
               <div onDragOver={e=>{e.preventDefault();setGlow(true);}}
                 onDrop={e=>{e.preventDefault();setGlow(false);const src=e.dataTransfer.getData("source"),idx=parseInt(e.dataTransfer.getData("cardIndex"));if(src==="hand"&&!isNaN(idx)&&isMyTurn)stageCard(myHand[idx]);}}
                 onDragLeave={()=>setGlow(false)}
-                style={{position:"relative",width:300,height:260,
+                style={{position:"relative",width:260,height:220,
                   background:glow?"rgba(80,200,80,.07)":"rgba(0,0,0,.18)",
-                  border:glow?"2px dashed rgba(80,200,80,.6)":isMyTurn?"2px dashed rgba(255,255,255,.2)":"1px solid rgba(255,255,255,.08)",
-                  borderRadius:28,flexShrink:0,transition:"all .15s",
-                  boxShadow:"inset 0 2px 20px rgba(0,0,0,.2)"}}>
+                  border:glow?"2px dashed rgba(80,200,80,.6)":isMyTurn?"2px dashed rgba(255,255,255,.22)":"1px solid rgba(255,255,255,.08)",
+                  borderRadius:24,flexShrink:0,transition:"all .15s",
+                  boxShadow:"inset 0 2px 16px rgba(0,0,0,.2)"}}>
 
                 {/* Partner (top) */}
-                <div style={{position:"absolute",top:12,left:"50%",transform:"translateX(-50%)",display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
+                <div style={{position:"absolute",top:10,left:"50%",transform:"translateX(-50%)"}}>
                   {tByP[players[partIdx]?.id]
                     ?<CardFace card={tByP[players[partIdx].id]} small highlight={pendingTrick?.winnerId===players[partIdx]?.id} disabled/>
                     :<div style={{width:54,height:78,border:"1px dashed rgba(255,255,255,.15)",borderRadius:9}}/>}
                 </div>
-
                 {/* Left */}
-                <div style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
+                <div style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)"}}>
                   {tByP[players[leftIdx]?.id]
                     ?<CardFace card={tByP[players[leftIdx].id]} small highlight={pendingTrick?.winnerId===players[leftIdx]?.id} disabled/>
                     :<div style={{width:54,height:78,border:"1px dashed rgba(255,255,255,.15)",borderRadius:9}}/>}
                 </div>
-
                 {/* Right */}
-                <div style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
+                <div style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)"}}>
                   {tByP[players[rightIdx]?.id]
                     ?<CardFace card={tByP[players[rightIdx].id]} small highlight={pendingTrick?.winnerId===players[rightIdx]?.id} disabled/>
                     :<div style={{width:54,height:78,border:"1px dashed rgba(255,255,255,.15)",borderRadius:9}}/>}
                 </div>
-
                 {/* Me (bottom) */}
-                <div style={{position:"absolute",bottom:12,left:"50%",transform:"translateX(-50%)",display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
+                <div style={{position:"absolute",bottom:10,left:"50%",transform:"translateX(-50%)"}}>
                   {staged&&!tByP[players[viewAs]?.id]
                     ?<div onClick={reveal} style={{cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
                         <CardBack small glow/>
@@ -1185,59 +1182,31 @@ function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,on
                         </div>
                       :<div style={{width:54,height:78,
                           border:isMyTurn?"2px dashed rgba(100,220,100,.5)":"1px dashed rgba(255,255,255,.15)",
-                          borderRadius:9,background:isMyTurn?"rgba(80,200,80,.06)":"transparent",
-                          transition:"all .15s"}}/>}
+                          borderRadius:9,background:isMyTurn?"rgba(80,200,80,.06)":"transparent",transition:"all .15s"}}/>}
                 </div>
-
-                {/* Trick winner overlay */}
                 {pendingTrick&&<div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",
-                  color:"#50e050",fontSize:13,fontWeight:700,background:"rgba(0,0,0,.7)",
-                  borderRadius:10,padding:"4px 14px",whiteSpace:"nowrap",pointerEvents:"none",
+                  color:"#50e050",fontSize:12,fontWeight:700,background:"rgba(0,0,0,.7)",
+                  borderRadius:10,padding:"3px 12px",whiteSpace:"nowrap",pointerEvents:"none",
                   border:"1px solid rgba(80,224,80,.3)"}}>🏆 {pendingTrick.winnerName}</div>}
-
-                {/* Drag hint */}
                 {isMyTurn&&!staged&&!Object.keys(tByP).length&&
                   <div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",
-                    color:"rgba(255,255,255,.18)",fontSize:13,textAlign:"center",pointerEvents:"none",lineHeight:1.6}}>
+                    color:"rgba(255,255,255,.18)",fontSize:12,textAlign:"center",pointerEvents:"none",lineHeight:1.6}}>
                     drag a card here
                   </div>}
               </div>
 
-              {/* ── ACTION AREA (below trick zone) ── */}
-              <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:8,width:"100%",maxWidth:420}}>
-
-                {/* Discard / Undo */}
-                {pendingTrick&&(
-                  <div style={{display:"flex",gap:8}}>
-                    <button onClick={discard} style={{background:"linear-gradient(135deg,#28a028,#40c040)",border:"none",borderRadius:10,padding:"10px 28px",color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"Georgia,serif",fontSize:14,boxShadow:"0 4px 14px rgba(0,0,0,.3)"}}>✓ Discard Trick</button>
-                    {lastDiscard&&<button onClick={undo} style={{background:"rgba(255,255,255,.9)",border:"2px solid #c8a030",borderRadius:10,padding:"10px 18px",color:"#8a6010",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:13,fontWeight:700}}>↩ Undo</button>}
-                  </div>
-                )}
-
-                {/* Bid panels — shown prominently when it's your turn */}
-                {!pendingTrick&&phase==="BIDDING_INITIAL"&&players[currentBidder]?.id===players[viewAs]?.id&&(
-                  <BidPanel min={Math.max(rule.minBid,(highBid||0)+1)} max={rule.cards} isInitial onBid={humanBid}/>
-                )}
-                {!pendingTrick&&phase==="SET_TRUMP"&&players[highBidder]?.id===players[viewAs]?.id&&(
-                  <div style={{background:"rgba(255,255,255,.95)",border:"2px solid #c8b880",borderRadius:14,padding:"14px 20px",textAlign:"center",boxShadow:"0 8px 24px rgba(0,0,0,.3)"}}>
-                    <div style={{color:"#4a3810",fontSize:11,letterSpacing:1,marginBottom:12,fontWeight:700}}>CHOOSE TRUMP SUIT</div>
-                    <div style={{display:"flex",gap:10,justifyContent:"center",marginBottom:14}}>
-                      {SUITS.map(s=><button key={s} onClick={()=>setTP(s)} style={{background:tPick===s?"#fff":"rgba(255,255,255,.5)",border:tPick===s?`2.5px solid ${SCLR[s]}`:"2px solid #ddd",borderRadius:10,padding:"8px 16px",cursor:"pointer",color:SCLR[s],fontSize:28,transition:"all .12s",boxShadow:tPick===s?`0 2px 10px ${SCLR[s]}44`:"none"}}>{SYM[s]}</button>)}
-                    </div>
-                    <button onClick={humanSetTrump} style={{background:"linear-gradient(135deg,#2a5e2a,#48904a)",border:"none",borderRadius:9,padding:"9px 28px",color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"Georgia,serif",fontSize:14}}>Set {tPick.charAt(0).toUpperCase()+tPick.slice(1)}</button>
-                  </div>
-                )}
-                {!pendingTrick&&phase==="BIDDING_OTHERS"&&players[currentBidder]?.id===players[viewAs]?.id&&(
-                  <BidPanel min={0} max={rule.cards} isInitial={false} onBid={humanBidOther}/>
-                )}
-
-                {/* Take card back */}
-                {staged&&<button onClick={unstage} style={Sb.outBtn}>↩ Take card back</button>}
-              </div>
+              {/* ── ACTION BUTTONS below trick zone ── */}
+              {pendingTrick&&(
+                <div style={{display:"flex",gap:8}}>
+                  <button onClick={discard} style={{background:"linear-gradient(135deg,#28a028,#40c040)",border:"none",borderRadius:10,padding:"9px 24px",color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"Georgia,serif",fontSize:13,boxShadow:"0 4px 14px rgba(0,0,0,.3)"}}>✓ Discard Trick</button>
+                  {lastDiscard&&<button onClick={undo} style={{background:"rgba(255,255,255,.9)",border:"2px solid #c8a030",borderRadius:10,padding:"9px 16px",color:"#8a6010",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:12,fontWeight:700}}>↩ Undo</button>}
+                </div>
+              )}
+              {staged&&<button onClick={unstage} style={Sb.outBtn}>↩ Take card back</button>}
             </div>
 
             {/* Right player */}
-            <div style={{flexShrink:0}}>
+            <div style={{flexShrink:0,alignSelf:"center"}}>
               <PlayerPanel position="side"
                 player={players[rightIdx]} bid={bids[players[rightIdx]?.id]} made={made[players[rightIdx]?.id]||0}
                 isDealer={dealer===rightIdx} isTurn={isTurn(rightIdx)}
@@ -1246,15 +1215,38 @@ function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,on
             </div>
           </div>
 
-          {/* ── BOTTOM: My name + hand ── */}
+          {/* ── BOTTOM: My panel + bid panel (if bidding) + hand ── */}
           <div style={{flexShrink:0,paddingBottom:4}}>
-            <div style={{display:"flex",justifyContent:"center",marginBottom:6}}>
+            {/* My name badge */}
+            <div style={{display:"flex",justifyContent:"center",marginBottom:5}}>
               <PlayerPanel position="top"
                 player={players[viewAs]} bid={bids[players[viewAs]?.id]} made={made[players[viewAs]?.id]||0}
                 isDealer={dealer===viewAs} isTurn={isTurn(viewAs)}
                 score={scores[players[viewAs]?.id]||0} teamCol={tc(tOf(viewAs))}
                 cardCount={myHand.length}/>
             </div>
+            {/* Bid panels — BELOW my name badge, ABOVE my hand */}
+            {!pendingTrick&&phase==="BIDDING_INITIAL"&&players[currentBidder]?.id===players[viewAs]?.id&&(
+              <div style={{display:"flex",justifyContent:"center",marginBottom:6}}>
+                <BidPanel min={Math.max(rule.minBid,(highBid||0)+1)} max={rule.cards} isInitial onBid={humanBid}/>
+              </div>
+            )}
+            {!pendingTrick&&phase==="SET_TRUMP"&&players[highBidder]?.id===players[viewAs]?.id&&(
+              <div style={{display:"flex",justifyContent:"center",marginBottom:6}}>
+                <div style={{background:"rgba(255,255,255,.95)",border:"2px solid #c8b880",borderRadius:14,padding:"12px 20px",textAlign:"center",boxShadow:"0 8px 24px rgba(0,0,0,.3)"}}>
+                  <div style={{color:"#4a3810",fontSize:11,letterSpacing:1,marginBottom:10,fontWeight:700}}>CHOOSE TRUMP SUIT</div>
+                  <div style={{display:"flex",gap:10,justifyContent:"center",marginBottom:12}}>
+                    {SUITS.map(s=><button key={s} onClick={()=>setTP(s)} style={{background:tPick===s?"#fff":"rgba(255,255,255,.5)",border:tPick===s?`2.5px solid ${SCLR[s]}`:"2px solid #ddd",borderRadius:10,padding:"8px 16px",cursor:"pointer",color:SCLR[s],fontSize:28,transition:"all .12s",boxShadow:tPick===s?`0 2px 10px ${SCLR[s]}44`:"none"}}>{SYM[s]}</button>)}
+                  </div>
+                  <button onClick={humanSetTrump} style={{background:"linear-gradient(135deg,#2a5e2a,#48904a)",border:"none",borderRadius:9,padding:"8px 24px",color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"Georgia,serif",fontSize:14}}>Set {tPick.charAt(0).toUpperCase()+tPick.slice(1)}</button>
+                </div>
+              </div>
+            )}
+            {!pendingTrick&&phase==="BIDDING_OTHERS"&&players[currentBidder]?.id===players[viewAs]?.id&&(
+              <div style={{display:"flex",justifyContent:"center",marginBottom:6}}>
+                <BidPanel min={0} max={rule.cards} isInitial={false} onBid={humanBidOther}/>
+              </div>
+            )}
             <ArcHand cards={myHand} onReorder={reorder} canDrag={isMyTurn} stagedId={staged?.id}/>
           </div>
 
