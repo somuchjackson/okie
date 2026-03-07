@@ -138,14 +138,27 @@ async function sbGetAllMembers(){ const sb=getSB(); if(!sb) return []; const {da
 
 function makeCode(){ const c="ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; let s=""; for(let i=0;i<6;i++)s+=c[0|Math.random()*c.length]; return s; }
 
-async function sbCreateGame(userId,username,t0,t1){
+async function sbCreateGame(userId,username){
   const sb=getSB();
   const roomCode=makeCode();
-  const {data:game,error}=await sb.from("games").insert({room_code:roomCode,status:"waiting",team0_name:t0,team1_name:t1,created_by:userId,is_bot_game:false}).select().single();
+  const {data:game,error}=await sb.from("games").insert({room_code:roomCode,status:"waiting",team0_name:"Team 1",team1_name:"Team 2",created_by:userId}).select().single();
   if(error) throw error;
   await sb.from("game_seats").insert({game_id:game.id,seat_index:0,player_id:userId,player_name:username,team_index:0});
   await sb.from("game_state").insert({game_id:game.id,state:{}});
   return game;
+}
+
+async function sbUpdateTeamNames(gameId,t0,t1){
+  const sb=getSB();
+  await sb.from("games").update({team0_name:t0,team1_name:t1}).eq("id",gameId);
+}
+
+async function sbMoveSeat(gameId,userId,newSeatIndex){
+  const sb=getSB();
+  // Remove old seat, insert new one
+  await sb.from("game_seats").delete().eq("game_id",gameId).eq("player_id",userId);
+  const teamIndex=newSeatIndex%2===0?0:1;
+  await sb.from("game_seats").insert({game_id:gameId,seat_index:newSeatIndex,player_id:userId,player_name:(await sb.from("profiles").select("username").eq("id",userId).single()).data?.username||"?",team_index:teamIndex});
 }
 
 async function sbGetGame(roomCode){
@@ -823,103 +836,147 @@ function StatsPage({onBack}){
 // LOBBY (waiting room)
 // ─────────────────────────────────────────────────────────────────────────────
 function LobbyPage({gameId,roomCode,seats,currentUserId,onGameStart,tNames,onBack}){
-  const filled=seats.filter(s=>s.player_id);
-  const emptySeatIds=[0,1,2,3].filter(i=>!seats.find(s=>s.seat_index===i&&s.player_id));
-  // botSeats: set of seat indices assigned to bots
+  const joined=seats.filter(s=>s.player_id);
   const[botSeats,setBotSeats]=useState(new Set());
   const[botNames,setBotNames]=useState({0:"Bot 1",1:"Bot 2",2:"Bot 3",3:"Bot 4"});
-  const readyToStart=emptySeatIds.every(i=>botSeats.has(i));
+  const[teamNames,setTeamNames]=useState([tNames[0]||"Team 1",tNames[1]||"Team 2"]);
+  const[teamAssign,setTeamAssign]=useState(()=>{
+    const m={}; joined.forEach((s,i)=>{m[s.player_id]=i<2?0:1;}); return m;
+  });
   const[copied,setCopied]=useState(false);
+  const isHost=joined[0]?.player_id===currentUserId;
   const pageUrl=window.location.href;
-  const shareText=`Join my Okie game!\nURL: ${pageUrl}\nRoom code: ${roomCode}`;
 
-  function toggleBot(seatIdx){
-    setBotSeats(prev=>{const n=new Set(prev);if(n.has(seatIdx))n.delete(seatIdx);else n.add(seatIdx);return n;});
+  function getTeamPlayers(ti){return joined.filter(s=>teamAssign[s.player_id]===ti);}
+  function moveToTeam(playerId,ti){setTeamAssign(a=>({...a,[playerId]:ti}));}
+
+  function toggleBots(){
+    if(botSeats.size>0){setBotSeats(new Set());return;}
+    const needed=4-joined.length; if(needed<=0)return;
+    const newBots=new Set();
+    let added=0;
+    for(let i=0;i<4&&added<needed;i++){
+      if(!joined.find(s=>s.seat_index===i)){newBots.add(i);added++;}
+    }
+    setBotSeats(newBots);
   }
+
+  function buildSeatMap(){
+    const t0=getTeamPlayers(0); const t1=getTeamPlayers(1);
+    const seatMap={};
+    t0.forEach((s,i)=>{seatMap[s.player_id]=i*2;});
+    t1.forEach((s,i)=>{seatMap[s.player_id]=i*2+1;});
+    const usedSeats=new Set(Object.values(seatMap));
+    const botSeatSet=new Set(); const botNamesOut={};
+    [0,1,2,3].forEach(i=>{if(!usedSeats.has(i)){botSeatSet.add(i);botNamesOut[i]=botNames[i];}});
+    return{botSeatSet,botNamesOut};
+  }
+
+  function startGame(){
+    const{botSeatSet,botNamesOut}=buildSeatMap();
+    sbUpdateTeamNames(gameId,teamNames[0],teamNames[1]).catch(()=>{});
+    onGameStart(botSeatSet,botNamesOut,teamAssign,teamNames);
+  }
+
   function copyInvite(){
-    navigator.clipboard.writeText(shareText).then(()=>{setCopied(true);setTimeout(()=>setCopied(false),2500);});
+    navigator.clipboard.writeText(`Join my Okie game!\nURL: ${pageUrl}\nRoom code: ${roomCode}`)
+      .then(()=>{setCopied(true);setTimeout(()=>setCopied(false),2500);});
   }
+
+  const totalFilled=joined.length+botSeats.size;
+  const canStart=totalFilled>=4;
+  const TEAM_COLORS=["#2a5e8a","#8a2a2a"];
+  const inp2={background:"none",border:"none",borderBottom:"2px solid",fontFamily:"Georgia,serif",fontSize:13,fontWeight:700,outline:"none",padding:"2px 4px",width:"100%",boxSizing:"border-box"};
 
   return(
-    <div style={{minHeight:"100vh",background:"#2a5e2a",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Georgia,serif",backgroundImage:"radial-gradient(ellipse,#3a7a3a,#1a4a1a)"}}>
-      <div style={{width:480,padding:36,background:"rgba(255,255,255,.96)",borderRadius:18,boxShadow:"0 10px 40px rgba(0,0,0,.3)"}}>
+    <div style={{minHeight:"100vh",background:"#2a5e2a",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Georgia,serif",backgroundImage:"radial-gradient(ellipse,#3a7a3a,#1a4a1a)",padding:"20px 0"}}>
+      <div style={{width:520,padding:32,background:"rgba(255,255,255,.97)",borderRadius:18,boxShadow:"0 10px 40px rgba(0,0,0,.3)"}}>
 
-        {/* Header with back button */}
         <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:20}}>
           <button onClick={onBack} style={{background:"none",border:"1.5px solid #ccc",borderRadius:7,padding:"5px 12px",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:12,color:"#666"}}>← Back</button>
           <div style={{flex:1,textAlign:"center"}}>
-            <div style={{fontSize:32,fontWeight:700,letterSpacing:4,lineHeight:1}}>OKIE</div>
-            <div style={{color:"#6a5a3a",fontSize:10,letterSpacing:3,marginTop:2}}>WAITING FOR PLAYERS</div>
+            <div style={{fontSize:28,fontWeight:700,letterSpacing:4,lineHeight:1}}>OKIE</div>
+            <div style={{color:"#888",fontSize:10,letterSpacing:3,marginTop:2}}>GAME LOBBY</div>
           </div>
-          <div style={{width:60}}/>{/* spacer to center title */}
+          <div style={{width:60}}/>
         </div>
 
-        {/* Room code + share */}
-        <div style={{background:"#f0f4f0",borderRadius:12,padding:"14px 20px",marginBottom:20,textAlign:"center"}}>
-          <div style={{color:"#888",fontSize:10,letterSpacing:2,marginBottom:6}}>ROOM CODE</div>
-          <div style={{fontSize:36,fontWeight:700,letterSpacing:10,color:"#2a5e2a",fontFamily:"monospace",marginBottom:10}}>{roomCode}</div>
-          <div style={{color:"#777",fontSize:11,marginBottom:12,lineHeight:1.5}}>
-            Friends go to <strong style={{color:"#2a5e2a"}}>{pageUrl}</strong><br/>
-            then click "Join Game" and enter the code above.
-          </div>
-          <button onClick={copyInvite} style={{background:copied?"#2a5e2a":"#fff",border:"2px solid #2a5e2a",borderRadius:8,padding:"8px 20px",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:13,fontWeight:700,color:copied?"#fff":"#2a5e2a",transition:"all .2s"}}>
-            {copied?"✓ Copied!":"📋 Copy Invite Link & Code"}
+        <div style={{background:"#f0f4f0",borderRadius:12,padding:"12px 18px",marginBottom:16,textAlign:"center"}}>
+          <div style={{color:"#888",fontSize:10,letterSpacing:2,marginBottom:4}}>ROOM CODE</div>
+          <div style={{fontSize:34,fontWeight:700,letterSpacing:10,color:"#2a5e2a",fontFamily:"monospace",marginBottom:8}}>{roomCode}</div>
+          <button onClick={copyInvite} style={{background:copied?"#2a5e2a":"#fff",border:"2px solid #2a5e2a",borderRadius:8,padding:"6px 16px",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:12,fontWeight:700,color:copied?"#fff":"#2a5e2a",transition:"all .2s"}}>
+            {copied?"✓ Copied!":"📋 Copy Invite"}
           </button>
         </div>
 
-        {/* Teams & seats */}
-        <div style={{display:"flex",gap:12,marginBottom:20}}>
-          {[0,1].map(ti=>(
-            <div key={ti} style={{flex:1,background:"#f8f4ee",border:`2px solid ${tc(ti)}44`,borderRadius:10,padding:"10px 14px"}}>
-              <div style={{color:tc(ti),fontSize:10,letterSpacing:1,fontWeight:700,marginBottom:8}}>{tNames[ti].toUpperCase()}</div>
-              {(ti===0?[0,2]:[1,3]).map(actualSeat=>{
-                const seat=seats.find(s=>s.seat_index===actualSeat);
-                const isBot=botSeats.has(actualSeat);
-                const isEmpty=!seat?.player_id;
-                return(
-                  <div key={actualSeat} style={{padding:"6px 8px",marginBottom:4,background:"rgba(255,255,255,.7)",borderRadius:7,border:seat?.player_id?`1.5px solid ${tc(ti)}44`:isBot?`1.5px solid #888`:"1.5px dashed #ddd"}}>
-                    <div style={{display:"flex",alignItems:"center",gap:6}}>
-                      <div style={{width:28,height:28,borderRadius:"50%",background:seat?.player_id?tc(ti):isBot?"#666":"#eee",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:"#fff",fontWeight:700}}>
-                        {seat?.player_name?seat.player_name[0].toUpperCase():isBot?"🤖":"?"}
-                      </div>
-                      <div style={{flex:1}}>
-                        {isEmpty&&isBot
-                          ? <input value={botNames[actualSeat]} onChange={e=>setBotNames(n=>({...n,[actualSeat]:e.target.value}))}
-                              style={{width:"100%",background:"none",border:"none",borderBottom:"1px solid #aaa",fontFamily:"Georgia,serif",fontSize:12,fontWeight:700,color:"#333",outline:"none",padding:"1px 0"}}/>
-                          : <div style={{fontSize:12,fontWeight:700,color:"#111"}}>{seat?.player_name||"Empty"}</div>
-                        }
-                        <div style={{fontSize:9,color:"#aaa"}}>Seat {actualSeat+1}{actualSeat===0?" · You":""}</div>
-                      </div>
-                      {seat?.player_id===currentUserId&&<span style={{fontSize:9,color:tc(ti),fontWeight:700}}>YOU</span>}
-                      {isEmpty&&seats.find(s=>s.seat_index===0)?.player_id===currentUserId&&(
-                        <button onClick={()=>toggleBot(actualSeat)} style={{fontSize:10,padding:"3px 8px",borderRadius:5,border:`1px solid ${isBot?"#888":"#ccc"}`,background:isBot?"#555":"#fff",color:isBot?"#fff":"#888",cursor:"pointer",fontFamily:"Georgia,serif",fontWeight:700,whiteSpace:"nowrap"}}>
-                          {isBot?"🤖 Bot":"+ Bot"}
-                        </button>
-                      )}
+        {joined.length<4&&(
+          <div style={{background:"#fffbf0",border:"1px solid #f0d880",borderRadius:8,padding:"8px 14px",marginBottom:14,fontSize:11,color:"#8a6a10",textAlign:"center"}}>
+            ⏳ {joined.length}/4 players joined
+            {isHost&&<> · <button onClick={toggleBots} style={{background:"none",border:"none",cursor:"pointer",color:"#2a5e2a",fontWeight:700,fontSize:11,fontFamily:"Georgia,serif",textDecoration:"underline"}}>{botSeats.size>0?"Remove bots":"Fill with bots"}</button></>}
+          </div>
+        )}
+
+        <div style={{marginBottom:6,fontSize:10,color:"#aaa",letterSpacing:1,textAlign:"center"}}>
+          ASSIGN TEAMS{isHost?" — drag or use arrows to move players":""}
+        </div>
+        <div style={{display:"flex",gap:12,marginBottom:16}}>
+          {[0,1].map(ti=>{
+            const players=getTeamPlayers(ti);
+            const color=TEAM_COLORS[ti];
+            const botsOnTeam=botSeats.size>0?Math.max(0,2-players.length):0;
+            return(
+              <div key={ti} style={{flex:1,border:`2px solid ${color}55`,borderRadius:12,padding:"12px 14px",background:`${color}08`}}>
+                <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:10,paddingBottom:8,borderBottom:`1px solid ${color}22`}}>
+                  <div style={{width:10,height:10,borderRadius:"50%",background:color,flexShrink:0}}/>
+                  {isHost
+                    ?<input value={teamNames[ti]} onChange={e=>setTeamNames(n=>{const c=[...n];c[ti]=e.target.value;return c;})}
+                        style={{...inp2,color,borderBottomColor:color}}/>
+                    :<span style={{color,fontSize:13,fontWeight:700}}>{teamNames[ti]}</span>}
+                </div>
+                {players.map(s=>(
+                  <div key={s.player_id} style={{display:"flex",alignItems:"center",gap:7,padding:"6px 8px",marginBottom:5,
+                    background:"rgba(255,255,255,.85)",borderRadius:8,border:`1px solid ${color}33`}}>
+                    <div style={{width:26,height:26,borderRadius:"50%",background:color,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"#fff",fontWeight:700,flexShrink:0}}>
+                      {s.player_name[0].toUpperCase()}
                     </div>
+                    <span style={{flex:1,fontSize:12,fontWeight:700,color:"#111"}}>{s.player_name}{s.player_id===currentUserId?" (you)":""}</span>
+                    {isHost&&(
+                      <button onClick={()=>moveToTeam(s.player_id,ti===0?1:0)}
+                        style={{fontSize:10,padding:"2px 8px",borderRadius:5,border:`1px solid ${TEAM_COLORS[ti===0?1:0]}55`,
+                          background:"#fff",color:TEAM_COLORS[ti===0?1:0],cursor:"pointer",fontFamily:"Georgia,serif",fontWeight:700}}>
+                        → {teamNames[ti===0?1:0].split(" ")[0]||"Other"}
+                      </button>
+                    )}
                   </div>
-                );
-              })}
-            </div>
-          ))}
+                ))}
+                {Array.from({length:botsOnTeam}).map((_,bi)=>(
+                  <div key={bi} style={{display:"flex",alignItems:"center",gap:7,padding:"6px 8px",marginBottom:5,
+                    background:"rgba(240,240,240,.7)",borderRadius:8,border:"1px dashed #bbb"}}>
+                    <div style={{width:26,height:26,borderRadius:"50%",background:"#999",display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,flexShrink:0}}>🤖</div>
+                    <span style={{flex:1,fontSize:12,color:"#888",fontStyle:"italic"}}>Bot</span>
+                  </div>
+                ))}
+                {players.length+botsOnTeam<2&&(
+                  <div style={{padding:"8px",borderRadius:8,border:"1px dashed #ccc",textAlign:"center",color:"#ccc",fontSize:11}}>
+                    Waiting…
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
 
-        <div style={{color:"#999",fontSize:11,textAlign:"center",marginBottom:16}}>
-          {filled.length}/4 players · {botSeats.size} bot{botSeats.size!==1?"s":""} assigned
-          {readyToStart?" — ready to deal!":""}
-        </div>
-
-        {readyToStart&&seats.find(s=>s.seat_index===0)?.player_id===currentUserId&&(
-          <button onClick={()=>onGameStart(botSeats,botNames)} style={{width:"100%",background:"linear-gradient(135deg,#2a5e2a,#48904a)",border:"none",borderRadius:10,padding:"13px",color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"Georgia,serif",fontSize:16,boxShadow:"0 4px 14px rgba(0,0,0,.22)"}}>
+        {canStart&&isHost&&(
+          <button onClick={startGame} style={{width:"100%",background:"linear-gradient(135deg,#2a5e2a,#48904a)",border:"none",borderRadius:10,padding:"13px",color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"Georgia,serif",fontSize:16,boxShadow:"0 4px 14px rgba(0,0,0,.22)"}}>
             Deal Cards →
           </button>
         )}
-        {readyToStart&&seats.find(s=>s.seat_index===0)?.player_id!==currentUserId&&(
-          <div style={{textAlign:"center",color:"#888",fontSize:13}}>Waiting for Seat 1 player to deal…</div>
+        {canStart&&!isHost&&(
+          <div style={{textAlign:"center",color:"#888",fontSize:13,padding:"10px"}}>Waiting for host to deal…</div>
         )}
-        {!readyToStart&&(
-          <div style={{color:"#aaa",fontSize:11,textAlign:"center"}}>
-            {emptySeatIds.length-botSeats.size} seat{emptySeatIds.size-botSeats.size!==1?"s":""} still need a player or bot
+        {!canStart&&(
+          <div style={{textAlign:"center",color:"#aaa",fontSize:12,padding:"10px"}}>
+            Need {4-totalFilled} more {4-totalFilled===1?"player":"players"} or bots to start
           </div>
         )}
       </div>
@@ -1478,7 +1535,7 @@ export default function OkieApp(){
   async function doCreateGame(){
     if(!user||!sbReady){startSolo();return;}
     try{
-      const g=await sbCreateGame(user.id,user.username,tNames[0],tNames[1]);
+      const g=await sbCreateGame(user.id,user.username);
       setGD({game:g,seats:[{seat_index:0,player_id:user.id,player_name:user.username,team_index:0}],isMultiplayer:true});
       setScreen("lobby");
     }catch(e){ alert("Error creating game: "+e.message); }
@@ -1500,22 +1557,35 @@ export default function OkieApp(){
     }catch(e){ alert("Error joining: "+e.message); }
   }
 
-  function handleLobbyStart(botSeats, botNames){
+  function handleLobbyStart(botSeatSet, botNames, teamAssign, teamNames){
     if(!gameData?.game)return;
     const seats=gameData.seats||[];
-    // Build full 4-player list, filling empty seats with bots
+    const joined=seats.filter(s=>s.player_id);
+
+    // Build seat assignments from teamAssign map
+    // team0 players get seats 0,2; team1 players get seats 1,3
+    const t0=joined.filter(s=>(teamAssign?.[s.player_id]??0)===0);
+    const t1=joined.filter(s=>(teamAssign?.[s.player_id]??1)===1);
+    const seatMap={};
+    t0.forEach((s,i)=>{seatMap[s.player_id]=i*2;});
+    t1.forEach((s,i)=>{seatMap[s.player_id]=i*2+1;});
+
+    // Build players array for all 4 seats
     const players=[0,1,2,3].map(i=>{
-      const seat=seats.find(s=>s.seat_index===i);
-      if(seat?.player_id){
-        // attach avatar if it's the current user (we have it); others will show initials for now
-        const avatarUrl=seat.player_id===user?.id?(user?.avatar_url||null):null;
-        return{id:`p${i}`,name:seat.player_name,isBot:false,userId:seat.player_id,avatarUrl};
+      // Find real player assigned to this seat
+      const realPlayer=joined.find(s=>seatMap[s.player_id]===i);
+      if(realPlayer){
+        const avatarUrl=realPlayer.player_id===user?.id?(user?.avatar_url||null):null;
+        return{id:`p${i}`,name:realPlayer.player_name,isBot:false,userId:realPlayer.player_id,avatarUrl};
       }
+      // Bot
       return{id:`p${i}`,name:botNames?.[i]||`Bot ${i+1}`,isBot:true,userId:null,avatarUrl:null};
     });
-    const hasBots=players.some(p=>p.isBot);
-    // Mark game as bot game if any bots present
-    if(hasBots) getSB()?.from("games").update({is_bot_game:true}).eq("id",gameData.game.id).then(()=>{});
+
+    // Update team names in game state
+    const finalTeamNames=teamNames||[gameData.game.team0_name,gameData.game.team1_name];
+    setTN(finalTeamNames);
+
     const gs=initHand({players,dealer:0,handIndex:0,scores:Object.fromEntries(players.map(p=>[p.id,0])),handScoreLog:[]});
     sbPushState(gameData.game.id,gs).catch(()=>{});
     setMyGs(gs);setScreen("game");
@@ -1646,21 +1716,15 @@ export default function OkieApp(){
   // ── CREATE GAME ──
   if(screen==="create") return(
     <div style={{minHeight:"100vh",background:"#2a5e2a",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Georgia,serif",backgroundImage:"radial-gradient(ellipse,#3a7a3a,#1a4a1a)"}}>
-      <div style={{width:420,padding:36,background:"rgba(255,255,255,.96)",borderRadius:18,boxShadow:"0 10px 40px rgba(0,0,0,.3)"}}>
-        <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:24}}>
+      <div style={{width:380,padding:36,background:"rgba(255,255,255,.96)",borderRadius:18,boxShadow:"0 10px 40px rgba(0,0,0,.3)"}}>
+        <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:28}}>
           <button onClick={()=>setScreen("menu")} style={Sb.hBtn}>← Back</button>
           <div style={{fontSize:22,fontWeight:700}}>Create Game</div>
         </div>
-        <div style={{marginBottom:14}}>
-          <div style={{color:"#5a4a2a",fontSize:11,letterSpacing:1,marginBottom:6,fontWeight:700}}>TEAM 1 NAME (your team)</div>
-          <input value={tNames[0]} onChange={e=>setTN(n=>[e.target.value,n[1]])} style={{width:"100%",boxSizing:"border-box",background:"#fff",border:"2px solid #c8b880",borderRadius:8,padding:"10px 14px",fontFamily:"Georgia,serif",fontSize:14,outline:"none"}}/>
+        <div style={{background:"#f0f4f0",borderRadius:10,padding:"14px 16px",marginBottom:24,fontSize:12,color:"#5a6a5a",lineHeight:1.6}}>
+          A room code will be generated that you can share with friends. Once everyone joins you'll assign teams before dealing.
         </div>
-        <div style={{marginBottom:24}}>
-          <div style={{color:"#5a4a2a",fontSize:11,letterSpacing:1,marginBottom:6,fontWeight:700}}>TEAM 2 NAME (opponents)</div>
-          <input value={tNames[1]} onChange={e=>setTN(n=>[n[0],e.target.value])} style={{width:"100%",boxSizing:"border-box",background:"#fff",border:"2px solid #c8b880",borderRadius:8,padding:"10px 14px",fontFamily:"Georgia,serif",fontSize:14,outline:"none"}}/>
-        </div>
-        <button onClick={doCreateGame} style={{width:"100%",background:"linear-gradient(135deg,#2a5e2a,#48904a)",border:"none",borderRadius:10,padding:"13px",color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"Georgia,serif",fontSize:16}}>Create Room →</button>
-        <div style={{color:"#999",fontSize:11,textAlign:"center",marginTop:10}}>You'll get a room code to share with your friends</div>
+        <button onClick={doCreateGame} style={{width:"100%",background:"linear-gradient(135deg,#2a5e2a,#48904a)",border:"none",borderRadius:10,padding:"14px",color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"Georgia,serif",fontSize:16,boxShadow:"0 4px 14px rgba(0,0,0,.2)"}}>Create Room →</button>
       </div>
     </div>
   );
