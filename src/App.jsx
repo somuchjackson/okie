@@ -134,7 +134,7 @@ async function sbUploadAvatar(userId, file){
   return publicUrl;
 }
 
-async function sbGetAllMembers(){ const sb=getSB(); if(!sb) return []; const {data}=await sb.from("profiles").select("username,first_name,last_name,grad_year,created_at").order("grad_year",{ascending:true}); return data||[]; }
+async function sbGetAllMembers(){ const sb=getSB(); if(!sb) return []; const {data}=await sb.from("profiles").select("username,first_name,last_name,grad_year,avatar_url,created_at").order("grad_year",{ascending:true}); return data||[]; }
 
 function makeCode(){ const c="ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; let s=""; for(let i=0;i<6;i++)s+=c[0|Math.random()*c.length]; return s; }
 
@@ -633,9 +633,13 @@ function MembersPage({onBack}){
     {key:"grad_year",label:"Class"},
   ];
 
+  const thStyle={textAlign:"left",padding:"10px 12px",fontSize:10,letterSpacing:1,cursor:"pointer",
+    borderBottom:"1px solid rgba(255,255,255,.1)",background:"rgba(255,255,255,.04)",
+    whiteSpace:"nowrap",userSelect:"none"};
+
   return(
     <div style={{minHeight:"100vh",background:"#1a1a2e",fontFamily:"Georgia,serif",padding:"20px 16px"}}>
-      <div style={{maxWidth:700,margin:"0 auto"}}>
+      <div style={{maxWidth:740,margin:"0 auto"}}>
         <div style={{display:"flex",alignItems:"center",gap:16,marginBottom:28}}>
           <button onClick={onBack} style={Sb.hBtn}>← Back</button>
           <div>
@@ -650,27 +654,41 @@ function MembersPage({onBack}){
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
               <thead>
                 <tr>
+                  <th style={{...thStyle,width:48,cursor:"default"}}/>
                   {COLS.map(col=>(
                     <th key={col.key} onClick={()=>sort(col.key)}
-                      style={{textAlign:"left",padding:"10px 12px",color:sortKey===col.key?"#f0d060":"rgba(255,255,255,.6)",
-                        fontSize:10,letterSpacing:1,cursor:"pointer",borderBottom:"1px solid rgba(255,255,255,.1)",
-                        background:"rgba(255,255,255,.04)",whiteSpace:"nowrap",userSelect:"none"}}>
+                      style={{...thStyle,color:sortKey===col.key?"#f0d060":"rgba(255,255,255,.6)"}}>
                       {col.label}{sortKey===col.key?(sortDir===1?" ▲":" ▼"):""}
                     </th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {sorted.map((row,i)=>(
-                  <tr key={row.username} style={{background:i%2===0?"transparent":"rgba(255,255,255,.03)"}}>
-                    {COLS.map(col=>(
-                      <td key={col.key} style={{padding:"9px 12px",color:"rgba(255,255,255,.85)",borderBottom:"1px solid rgba(255,255,255,.06)"}}>
-                        {row[col.key]??"—"}
+                {sorted.map((row,i)=>{
+                  const initials=(row.first_name?row.first_name[0]:"?").toUpperCase();
+                  const colors=["#2a5e8a","#5e2a8a","#2a8a5e","#8a5e2a","#8a2a5e","#2a5e2a"];
+                  const color=colors[(row.username||"").charCodeAt(0)%colors.length];
+                  return(
+                    <tr key={row.username||i} style={{background:i%2===0?"transparent":"rgba(255,255,255,.03)"}}>
+                      {/* Avatar cell */}
+                      <td style={{padding:"7px 12px",borderBottom:"1px solid rgba(255,255,255,.06)"}}>
+                        <div style={{width:34,height:34,borderRadius:"50%",overflow:"hidden",
+                          background:color,display:"flex",alignItems:"center",justifyContent:"center",
+                          fontSize:13,fontWeight:700,color:"#fff",flexShrink:0}}>
+                          {row.avatar_url
+                            ?<img src={row.avatar_url} alt={row.username} style={{width:"100%",height:"100%",objectFit:"cover"}}/>
+                            :initials}
+                        </div>
                       </td>
-                    ))}
-                  </tr>
-                ))}
-                {!sorted.length&&<tr><td colSpan={4} style={{padding:32,textAlign:"center",color:"rgba(255,255,255,.35)"}}>No members yet.</td></tr>}
+                      {COLS.map(col=>(
+                        <td key={col.key} style={{padding:"9px 12px",color:"rgba(255,255,255,.85)",borderBottom:"1px solid rgba(255,255,255,.06)"}}>
+                          {row[col.key]??"—"}
+                        </td>
+                      ))}
+                    </tr>
+                  );
+                })}
+                {!sorted.length&&<tr><td colSpan={5} style={{padding:32,textAlign:"center",color:"rgba(255,255,255,.35)"}}>No members yet.</td></tr>}
               </tbody>
             </table>
           </div>
