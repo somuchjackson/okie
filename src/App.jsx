@@ -477,13 +477,14 @@ function ProfilePage({user, onBack, onSave}){
   const[lastName,setLN]=useState(user?.last_name||"");
   const[gradYear,setGY]=useState(user?.grad_year?String(user.grad_year):"");
   const[username,setUN]=useState(user?.username||"");
-  const[avatarPreview,setAP]=useState(user?.avatar_url||null);
-  const[avatarFile,setAF]=useState(null);
-  const[uploadProgress,setUP]=useState(false);
+  const[avatarPreview,setAvatarPreview]=useState(user?.avatar_url||null);
+  const[avatarFile,setAvatarFile]=useState(null);
+  const[uploading,setUploading]=useState(false);
   const[saving,setSaving]=useState(false);
   const[saved,setSaved]=useState(false);
   const[err,setErr]=useState("");
   const fileRef=useRef();
+  if(!user) return null;
 
   const isIncomplete=!user?.first_name||!user?.last_name||!user?.grad_year;
   const displayName=firstName||username||user?.username||"?";
@@ -492,9 +493,9 @@ function ProfilePage({user, onBack, onSave}){
     const f=e.target.files?.[0]; if(!f) return;
     if(!f.type.startsWith("image/")){setErr("Please select an image file");return;}
     if(f.size>5*1024*1024){setErr("Image must be under 5MB");return;}
-    setAF(f);
+    setAvatarFile(f);
     const reader=new FileReader();
-    reader.onload=ev=>setAP(ev.target.result);
+    reader.onload=ev=>setAvatarPreview(ev.target.result);
     reader.readAsDataURL(f);
     setErr("");
   }
@@ -505,15 +506,15 @@ function ProfilePage({user, onBack, onSave}){
     try{
       let finalAvatarUrl=user?.avatar_url||null;
       if(avatarFile){
-        setUP(true);
+        setUploading(true);
         finalAvatarUrl=await sbUploadAvatar(user.id,avatarFile);
-        setUP(false);
+        setUploading(false);
       }
       await sbUpdateProfile(user.id,{first_name:firstName.trim(),last_name:lastName.trim(),grad_year:gradYear,username:username.trim(),avatar_url:finalAvatarUrl});
       setSaved(true);
       onSave({...user,first_name:firstName.trim(),last_name:lastName.trim(),grad_year:gradYear?parseInt(gradYear):null,username:username.trim(),avatar_url:finalAvatarUrl});
       setTimeout(()=>setSaved(false),2500);
-    }catch(e){setErr(e.message||"Save failed");setUP(false);}
+    }catch(e){setErr(e.message||"Save failed");setUploading(false);}
     setSaving(false);
   }
 
@@ -562,7 +563,7 @@ function ProfilePage({user, onBack, onSave}){
                 {avatarPreview&&avatarPreview!==user?.avatar_url?"✓ Image selected — click to change":"📷 Upload Photo"}
               </button>
               {avatarPreview&&(
-                <button onClick={()=>{setAP(null);setAF(null);}}
+                <button onClick={()=>{setAvatarPreview(null);setAvatarFile(null);}}
                   style={{width:"100%",background:"none",border:"1px solid #e0c0c0",borderRadius:7,
                     padding:"6px",cursor:"pointer",color:"#a06060",fontSize:11,fontFamily:"Georgia,serif"}}>
                   Remove photo
@@ -597,11 +598,11 @@ function ProfilePage({user, onBack, onSave}){
 
         {err&&<div style={{color:"#c02020",fontSize:12,marginBottom:10}}>{err}</div>}
 
-        <button onClick={save} disabled={saving||uploadProgress}
+        <button onClick={save} disabled={saving||uploading}
           style={{width:"100%",background:saved?"#28a028":"linear-gradient(135deg,#2a5e2a,#48904a)",
             border:"none",borderRadius:10,padding:"13px",color:"#fff",fontWeight:700,
-            cursor:(saving||uploadProgress)?"wait":"pointer",fontFamily:"Georgia,serif",fontSize:15,transition:"background .3s"}}>
-          {saved?"✓ Saved!":uploadProgress?"Uploading photo…":saving?"Saving…":"Save Profile"}
+            cursor:(saving||uploading)?"wait":"pointer",fontFamily:"Georgia,serif",fontSize:15,transition:"background .3s"}}>
+          {saved?"✓ Saved!":uploading?"Uploading photo…":saving?"Saving…":"Save Profile"}
         </button>
       </div>
     </div>
