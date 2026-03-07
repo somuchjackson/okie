@@ -148,6 +148,28 @@ async function sbCreateGame(userId,username){
   return game;
 }
 
+async function sbFindActiveGame(userId){
+  const sb=getSB(); if(!sb) return null;
+  // Find a game where user has a seat and game is in progress
+  const {data}=await sb.from("game_seats")
+    .select("game_id,seat_index,games!inner(id,room_code,status,team0_name,team1_name,game_state(state),game_seats(*))")
+    .eq("player_id",userId)
+    .eq("games.status","waiting")
+    .limit(1);
+  // Also check active games
+  const {data:data2}=await sb.from("game_seats")
+    .select("game_id,seat_index,game:games!inner(id,room_code,status,team0_name,team1_name,game_state(state),game_seats(*))")
+    .eq("player_id",userId)
+    .in("games.status",["waiting","active"])
+    .order("created_at",{ascending:false})
+    .limit(1);
+  const row=data2?.[0];
+  if(!row?.game) return null;
+  const gs=row.game.game_state?.[0]?.state;
+  if(!gs||!gs.phase||gs.phase==="GAME_OVER") return null;
+  return row.game;
+}
+
 async function sbUpdateTeamNames(gameId,t0,t1){
   const sb=getSB();
   await sb.from("games").update({team0_name:t0,team1_name:t1}).eq("id",gameId);
@@ -987,7 +1009,7 @@ function LobbyPage({gameId,roomCode,seats,currentUserId,onGameStart,tNames,onBac
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN GAME BOARD
 // ─────────────────────────────────────────────────────────────────────────────
-function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,onGameEnd}){
+function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,disconnected={},seats=[],onReplaceWithBot,onGameEnd}){
   const[staged,setStaged]=useState(null);
   const[glow,setGlow]=useState(false);
   const[log,setLog]=useState([]);
@@ -1411,6 +1433,40 @@ function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,on
         </div>
       </div>
 
+      {/* ── DISCONNECT OVERLAY ── */}
+      {isMultiplayer&&Object.keys(disconnected).length>0&&(()=>{
+        const absentPlayers=gs?.players?.filter(p=>!p.isBot&&disconnected[p.userId])||[];
+        if(!absentPlayers.length) return null;
+        const isHost=seats[0]?.player_id===myPlayerId;
+        return(
+          <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,.6)",backdropFilter:"blur(3px)",
+            zIndex:60,display:"flex",alignItems:"center",justifyContent:"center"}}>
+            <div style={{background:"rgba(20,20,20,.95)",border:"1px solid rgba(255,200,80,.3)",borderRadius:16,
+              padding:"28px 36px",textAlign:"center",maxWidth:360,boxShadow:"0 8px 32px rgba(0,0,0,.5)"}}>
+              <div style={{fontSize:32,marginBottom:8}}>⏸</div>
+              <div style={{color:"#f0e6c8",fontSize:18,fontWeight:700,marginBottom:8}}>Game Paused</div>
+              <div style={{color:"rgba(255,255,255,.6)",fontSize:13,marginBottom:20,lineHeight:1.6}}>
+                {absentPlayers.map(p=>p.name).join(", ")} {absentPlayers.length===1?"has":"have"} disconnected.<br/>
+                Waiting for them to return…
+              </div>
+              {isHost&&(
+                <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                  {absentPlayers.map(p=>(
+                    <button key={p.userId} onClick={()=>onReplaceWithBot&&onReplaceWithBot(p.userId,p.id)}
+                      style={{background:"linear-gradient(135deg,#5a3a1a,#8a6030)",border:"none",borderRadius:9,
+                        padding:"10px 20px",color:"#f0e6c8",fontWeight:700,cursor:"pointer",
+                        fontFamily:"Georgia,serif",fontSize:13}}>
+                      🤖 Replace {p.name} with Bot
+                    </button>
+                  ))}
+                </div>
+              )}
+              {!isHost&&<div style={{color:"rgba(255,255,255,.4)",fontSize:12}}>Only the host can replace players with bots.</div>}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* ── BOTTOM-LEFT HUD: status prompt + discard/undo/unstage ── */}
       <div style={{position:"absolute",bottom:20,left:20,zIndex:40,display:"flex",flexDirection:"column",gap:8,alignItems:"flex-start",maxWidth:320}}>
         <div style={{background:"rgba(0,0,0,.72)",backdropFilter:"blur(6px)",borderRadius:12,padding:"8px 16px",
@@ -1445,7 +1501,11 @@ function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,on
 // MAIN APP (Auth + Routing)
 // ─────────────────────────────────────────────────────────────────────────────
 export default function OkieApp(){
-  const[screen,setScreen]=useState("auth");     // auth | menu | create | join | lobby | game | stats | members | profile
+  const[screen,setScreen]=useState(()=>{
+    // Try to restore screen from history state on load
+    return window.history.state?.okieScreen||"auth";
+  });
+  const screenRef=useRef("auth");
   const[user,setUser]=useState(null);
   const[authMode,setAuthMode]=useState("login");// login | signup
   const[authUser,setAuthU]=useState("");
@@ -1462,6 +1522,29 @@ export default function OkieApp(){
   const[tNames,setTN]=useState(["Team 1","Team 2"]);
   const[pNames,setPN]=useState(["","","",""]);
   const[sbReady,setSBReady]=useState(false);
+  const[disconnected,setDisconnected]=useState({}); // {playerId: true} for absent players
+  const heartbeatRef=useRef(null);
+
+  // Navigation: sync screen changes with browser history
+  const navTo=useCallback((newScreen)=>{
+    if(newScreen===screenRef.current)return;
+    screenRef.current=newScreen;
+    window.history.pushState({okieScreen:newScreen},"",window.location.pathname);
+    setScreen(newScreen);
+  },[]);
+
+  // Handle browser back/forward button
+  useEffect(()=>{
+    const handler=(e)=>{
+      const s=e.state?.okieScreen;
+      if(s){screenRef.current=s;setScreen(s);}
+      else{screenRef.current="menu";navTo("menu");}
+    };
+    window.addEventListener("popstate",handler);
+    // Push initial state so back button works from first screen
+    window.history.replaceState({okieScreen:screen},"",window.location.pathname);
+    return()=>window.removeEventListener("popstate",handler);
+  },[]);
 
   // Load Supabase SDK dynamically
   useEffect(()=>{
@@ -1480,26 +1563,56 @@ export default function OkieApp(){
         const meta=session.user.user_metadata;
         const profile=await sbGetProfile(session.user.id);
         setUser({id:session.user.id,username:profile?.username||meta?.username||session.user.email?.split("@")[0],first_name:profile?.first_name,last_name:profile?.last_name,grad_year:profile?.grad_year,avatar_url:profile?.avatar_url||null});
-        setScreen("menu");
+        navTo("menu");
       }
     });
   },[sbReady]);
 
-  // Realtime subscription for multiplayer
+  // Realtime subscription for multiplayer + presence heartbeat
   useEffect(()=>{
-    if(!sbReady||!gameData?.game?.id||screen!=="game")return;
+    if(!sbReady||!gameData?.game?.id||(screen!=="game"&&screen!=="lobby"))return;
     const sb=getSB(); if(!sb)return;
-    const sub=sb.channel(`game-${gameData.game.id}`)
-      .on("postgres_changes",{event:"UPDATE",schema:"public",table:"game_state",filter:`game_id=eq.${gameData.game.id}`},(payload)=>{
-        // Only update if it's not from us (simple: always merge)
+    const gameId=gameData.game.id;
+
+    // Presence channel for heartbeat / disconnect detection
+    const presenceCh=sb.channel(`presence-${gameId}`,{config:{presence:{key:user?.id||"anon"}}});
+    presenceCh
+      .on("presence",{event:"sync"},()=>{
+        const state=presenceCh.presenceState();
+        const activeIds=new Set(Object.keys(state));
+        // Mark players as disconnected if not in presence state
+        if(gameData?.seats){
+          const absent={};
+          gameData.seats.forEach(s=>{
+            if(s.player_id&&!activeIds.has(s.player_id)) absent[s.player_id]=true;
+          });
+          setDisconnected(absent);
+        }
+      })
+      .subscribe(async(status)=>{
+        if(status==="SUBSCRIBED") await presenceCh.track({userId:user?.id,at:Date.now()});
+      });
+
+    // Heartbeat every 20s to stay present
+    heartbeatRef.current=setInterval(async()=>{
+      await presenceCh.track({userId:user?.id,at:Date.now()});
+    },20000);
+
+    // Game state subscription
+    const gameSub=sb.channel(`game-${gameId}`)
+      .on("postgres_changes",{event:"UPDATE",schema:"public",table:"game_state",filter:`game_id=eq.${gameId}`},(payload)=>{
         if(payload.new?.state) setMyGs(payload.new.state);
       })
-      .on("postgres_changes",{event:"INSERT",schema:"public",table:"game_seats",filter:`game_id=eq.${gameData.game.id}`},()=>{
-        // Refresh seats
+      .on("postgres_changes",{event:"INSERT",schema:"public",table:"game_seats",filter:`game_id=eq.${gameId}`},()=>{
         sbGetGame(gameData.game.room_code).then(g=>{ if(g)setGD(d=>({...d,game:g,seats:g.game_seats})); });
       })
       .subscribe();
-    return()=>{ sb.removeChannel(sub); };
+
+    return()=>{
+      clearInterval(heartbeatRef.current);
+      sb.removeChannel(presenceCh);
+      sb.removeChannel(gameSub);
+    };
   },[sbReady,gameData?.game?.id,screen]);
 
   async function doAuth(){
@@ -1514,7 +1627,7 @@ export default function OkieApp(){
         setUser(updatedUser);
         // Send to profile page if any required fields are missing
         const incomplete=!updatedUser.first_name||!updatedUser.last_name||!updatedUser.grad_year;
-        setScreen(incomplete?"profile":"menu");
+        navTo(incomplete?"profile":"menu");
       }
     }catch(e){ setAuthErr(e.message||"Auth failed"); }
     setAuthL(false);
@@ -1529,7 +1642,7 @@ export default function OkieApp(){
       {id:"p3",name:names[3],isBot:true,avatarUrl:null},
     ];
     const gs=initHand({players,dealer:0,handIndex:0,scores:{p0:0,p1:0,p2:0,p3:0},handScoreLog:[]});
-    setMyGs(gs);setGD({game:null,seats:null,isMultiplayer:false});setScreen("game");
+    setMyGs(gs);setGD({game:null,seats:null,isMultiplayer:false});navTo("game");
   }
 
   async function doCreateGame(){
@@ -1537,7 +1650,7 @@ export default function OkieApp(){
     try{
       const g=await sbCreateGame(user.id,user.username);
       setGD({game:g,seats:[{seat_index:0,player_id:user.id,player_name:user.username,team_index:0}],isMultiplayer:true});
-      setScreen("lobby");
+      navTo("lobby");
     }catch(e){ alert("Error creating game: "+e.message); }
   }
 
@@ -1553,7 +1666,7 @@ export default function OkieApp(){
       await sbJoinSeat(g.id,open,user.id,user.username);
       const fresh=await sbGetGame(joinCode);
       setGD({game:fresh,seats:fresh.game_seats,isMultiplayer:true});
-      setScreen("lobby");
+      navTo("lobby");
     }catch(e){ alert("Error joining: "+e.message); }
   }
 
@@ -1588,7 +1701,7 @@ export default function OkieApp(){
 
     const gs=initHand({players,dealer:0,handIndex:0,scores:Object.fromEntries(players.map(p=>[p.id,0])),handScoreLog:[]});
     sbPushState(gameData.game.id,gs).catch(()=>{});
-    setMyGs(gs);setScreen("game");
+    setMyGs(gs);navTo("game");
   }
 
   const mySeatIdx=gameData?.seats?.find(s=>s.player_id===user?.id)?.seat_index??0;
@@ -1664,17 +1777,17 @@ export default function OkieApp(){
           <div style={{color:"#6a5a3a",fontSize:11,letterSpacing:3}}>Welcome, {user?.first_name||user?.username}</div>
         </div>
         <div style={{display:"flex",flexDirection:"column",gap:10}}>
-          <button onClick={()=>setScreen("create")} style={Sb.menuBtn("#2a5e2a","#48904a")}>🃏  Create Game (Multiplayer)</button>
-          <button onClick={()=>setScreen("join")} style={Sb.menuBtn("#1a4a7a","#2a7ab0")}>🔗  Join Game by Code</button>
-          <button onClick={()=>setScreen("solo")} style={Sb.menuBtn("#4a3a1a","#7a6a3a")}>🤖  Solo vs Bots</button>
-          <button onClick={()=>setScreen("stats")} style={Sb.menuBtn("#3a1a4a","#6a3a7a")}>📊  Leaderboard & Stats</button>
-          <button onClick={()=>setScreen("members")} style={Sb.menuBtn("#1a3a4a","#2a6a7a")}>👥  Members</button>
-          <button onClick={()=>setScreen("profile")} style={{...Sb.menuBtn("#3a2a1a","#6a4a2a"),display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <button onClick={()=>navTo("create")} style={Sb.menuBtn("#2a5e2a","#48904a")}>🃏  Create Game (Multiplayer)</button>
+          <button onClick={()=>navTo("join")} style={Sb.menuBtn("#1a4a7a","#2a7ab0")}>🔗  Join Game by Code</button>
+          <button onClick={()=>navTo("solo")} style={Sb.menuBtn("#4a3a1a","#7a6a3a")}>🤖  Solo vs Bots</button>
+          <button onClick={()=>navTo("stats")} style={Sb.menuBtn("#3a1a4a","#6a3a7a")}>📊  Leaderboard & Stats</button>
+          <button onClick={()=>navTo("members")} style={Sb.menuBtn("#1a3a4a","#2a6a7a")}>👥  Members</button>
+          <button onClick={()=>navTo("profile")} style={{...Sb.menuBtn("#3a2a1a","#6a4a2a"),display:"flex",alignItems:"center",justifyContent:"space-between"}}>
             <span>⚙️  My Profile</span>
             {(!user?.first_name||!user?.last_name||!user?.grad_year)&&<span style={{background:"#e07020",borderRadius:10,padding:"2px 8px",fontSize:10,fontWeight:700}}>Incomplete</span>}
           </button>
         </div>
-        <button onClick={()=>{sbSignOut();setUser(null);setScreen("auth");}} style={{width:"100%",marginTop:16,background:"none",border:"1.5px solid #ddd",borderRadius:10,padding:"9px",color:"#999",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:13}}>Sign Out</button>
+        <button onClick={()=>{sbSignOut();setUser(null);navTo("auth");}} style={{width:"100%",marginTop:16,background:"none",border:"1.5px solid #ddd",borderRadius:10,padding:"9px",color:"#999",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:13}}>Sign Out</button>
       </div>
     </div>
   );
@@ -1686,7 +1799,7 @@ export default function OkieApp(){
       <div style={{minHeight:"100vh",background:"#2a5e2a",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Georgia,serif",backgroundImage:"radial-gradient(ellipse,#3a7a3a,#1a4a1a)"}}>
         <div style={{width:520,padding:36,background:"rgba(255,255,255,.96)",borderRadius:18,boxShadow:"0 10px 40px rgba(0,0,0,.3)"}}>
           <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:24}}>
-            <button onClick={()=>setScreen("menu")} style={{background:"none",border:"1.5px solid #ccc",borderRadius:7,padding:"5px 12px",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:12,color:"#666"}}>← Back</button>
+            <button onClick={()=>navTo("menu")} style={{background:"none",border:"1.5px solid #ccc",borderRadius:7,padding:"5px 12px",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:12,color:"#666"}}>← Back</button>
             <div style={{fontSize:22,fontWeight:700}}>Solo vs Bots</div>
           </div>
           <div style={{display:"flex",gap:14,marginBottom:20}}>
@@ -1718,7 +1831,7 @@ export default function OkieApp(){
     <div style={{minHeight:"100vh",background:"#2a5e2a",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Georgia,serif",backgroundImage:"radial-gradient(ellipse,#3a7a3a,#1a4a1a)"}}>
       <div style={{width:380,padding:36,background:"rgba(255,255,255,.96)",borderRadius:18,boxShadow:"0 10px 40px rgba(0,0,0,.3)"}}>
         <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:28}}>
-          <button onClick={()=>setScreen("menu")} style={{background:"none",border:"1.5px solid #ccc",borderRadius:7,padding:"5px 12px",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:12,color:"#666"}}>← Back</button>
+          <button onClick={()=>navTo("menu")} style={{background:"none",border:"1.5px solid #ccc",borderRadius:7,padding:"5px 12px",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:12,color:"#666"}}>← Back</button>
           <div style={{fontSize:22,fontWeight:700}}>Create Game</div>
         </div>
         <div style={{background:"#f0f4f0",borderRadius:10,padding:"14px 16px",marginBottom:24,fontSize:12,color:"#5a6a5a",lineHeight:1.6}}>
@@ -1734,7 +1847,7 @@ export default function OkieApp(){
     <div style={{minHeight:"100vh",background:"#2a5e2a",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Georgia,serif",backgroundImage:"radial-gradient(ellipse,#3a7a3a,#1a4a1a)"}}>
       <div style={{width:380,padding:36,background:"rgba(255,255,255,.96)",borderRadius:18,boxShadow:"0 10px 40px rgba(0,0,0,.3)"}}>
         <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:24}}>
-          <button onClick={()=>setScreen("menu")} style={{background:"none",border:"1.5px solid #ccc",borderRadius:7,padding:"5px 12px",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:12,color:"#666"}}>← Back</button>
+          <button onClick={()=>navTo("menu")} style={{background:"none",border:"1.5px solid #ccc",borderRadius:7,padding:"5px 12px",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:12,color:"#666"}}>← Back</button>
           <div style={{fontSize:22,fontWeight:700}}>Join Game</div>
         </div>
         <div style={{marginBottom:20}}>
@@ -1751,24 +1864,33 @@ export default function OkieApp(){
   if(screen==="lobby"&&gameData?.game) return(
     <LobbyPage gameId={gameData.game.id} roomCode={gameData.game.room_code}
       seats={gameData.seats||[]} currentUserId={user?.id} tNames={[gameData.game.team0_name,gameData.game.team1_name]}
-      onGameStart={handleLobbyStart} onBack={()=>setScreen("menu")}/>
+      onGameStart={handleLobbyStart} onBack={()=>navTo("menu")}/>
   );
 
   // ── GAME ──
   if(screen==="game"&&myGs) return(
     <GameBoard gs={myGs} setGs={setMyGs} mySeatIdx={mySeatIdx} myPlayerId={user?.id}
       gameId={gameData?.game?.id} tNames={tNames} isMultiplayer={gameData?.isMultiplayer}
-      onGameEnd={()=>setScreen("menu")}/>
+      disconnected={disconnected} seats={gameData?.seats||[]}
+      onReplaceWithBot={(playerId,seatIdx)=>{
+        setMyGs(g=>{
+          if(!g)return g;
+          const players=g.players.map(p=>p.userId===playerId?{...p,isBot:true,name:p.name+" (bot)"}:p);
+          return{...g,players};
+        });
+        setDisconnected(d=>{const n={...d};delete n[playerId];return n;});
+      }}
+      onGameEnd={()=>navTo("menu")}/>
   );
 
   // ── STATS ──
-  if(screen==="stats") return <StatsPage onBack={()=>setScreen("menu")}/>;
+  if(screen==="stats") return <StatsPage onBack={()=>navTo("menu")}/>;
 
   // ── MEMBERS ──
-  if(screen==="members") return <MembersPage onBack={()=>setScreen("menu")}/>;
+  if(screen==="members") return <MembersPage onBack={()=>navTo("menu")}/>;
 
   // ── PROFILE ──
-  if(screen==="profile") return <ProfilePage user={user} onBack={()=>setScreen("menu")} onSave={updatedUser=>{setUser(updatedUser);setScreen("menu");}}/>;
+  if(screen==="profile") return <ProfilePage user={user} onBack={()=>navTo("menu")} onSave={updatedUser=>{setUser(updatedUser);navTo("menu");}}/>;
 
   return null;
 }
