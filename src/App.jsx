@@ -1734,7 +1734,7 @@ export default function OkieApp(){
     <div style={{minHeight:"100vh",background:"#2a5e2a",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Georgia,serif",backgroundImage:"radial-gradient(ellipse,#3a7a3a,#1a4a1a)"}}>
       <div style={{width:380,padding:36,background:"rgba(255,255,255,.96)",borderRadius:18,boxShadow:"0 10px 40px rgba(0,0,0,.3)"}}>
         <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:24}}>
-          <button onClick={()=>setScreen("menu")} style={Sb.hBtn}>← Back</button>
+          <button onClick={()=>setScreen("menu")} style={{background:"none",border:"1.5px solid #ccc",borderRadius:7,padding:"5px 12px",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:12,color:"#666"}}>← Back</button>
           <div style={{fontSize:22,fontWeight:700}}>Join Game</div>
         </div>
         <div style={{marginBottom:20}}>
