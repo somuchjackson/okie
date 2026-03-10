@@ -163,6 +163,27 @@ async function sbCreateGame(userId,username){
   return game;
 }
 
+async function sbCreateBotGame(userId,username,playerNames,teamNames){
+  const sb=getSB(); if(!sb) throw new Error("Not connected");
+  const roomCode=makeCode();
+  const {data:game,error}=await sb.from("games").insert({
+    room_code:roomCode,status:"active",is_bot_game:true,
+    team0_name:teamNames[0]||"Team 1",team1_name:teamNames[1]||"Team 2",
+    created_by:userId
+  }).select().single();
+  if(error) throw error;
+  // Insert seats: seat 0 = human, seats 1-3 = bots
+  const seatRows=playerNames.map((name,i)=>({
+    game_id:game.id,seat_index:i,
+    player_id:i===0?userId:null,
+    player_name:name,
+    team_index:i%2===0?0:1,
+  }));
+  await sb.from("game_seats").insert(seatRows);
+  await sb.from("game_state").insert({game_id:game.id,state:{}});
+  return game;
+}
+
 async function sbFindActiveGame(userId){
   const sb=getSB(); if(!sb) return null;
   // Find a game where user has a seat and game is in progress
@@ -1764,7 +1785,7 @@ export default function OkieApp(){
     setAuthL(false);
   }
 
-  function startSolo(){
+  async function startSolo(){
     const names=[pNames[0].trim()||"You",pNames[1].trim()||"Dewski",pNames[2].trim()||"Jackson",pNames[3].trim()||"Tim"];
     const players=[
       {id:"p0",name:names[0],isBot:false,userId:user?.id,avatarUrl:user?.avatar_url||null},
@@ -1773,7 +1794,15 @@ export default function OkieApp(){
       {id:"p3",name:names[3],isBot:true,avatarUrl:null},
     ];
     const gs=initHand({players,dealer:0,handIndex:0,scores:{p0:0,p1:0,p2:0,p3:0},handScoreLog:[]});
-    setMyGs(gs);setGD({game:null,seats:null,isMultiplayer:false});navTo("game");
+    let gameRecord=null;
+    if(user?.id&&sbReady){
+      try{
+        gameRecord=await sbCreateBotGame(user.id,names[0],names,tNames);
+      }catch(e){ console.warn("Could not create bot game record:",e.message); }
+    }
+    setMyGs(gs);
+    setGD({game:gameRecord,seats:null,isMultiplayer:!!gameRecord,isBotGame:true});
+    navTo("game");
   }
 
   async function doCreateGame(){
