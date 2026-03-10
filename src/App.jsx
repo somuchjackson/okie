@@ -42,7 +42,7 @@ const tOf = i  => i%2===0 ? 0 : 1;
 const buildDeck = () => { const d=[]; for(const s of SUITS)for(const r of RANKS)d.push({suit:s,rank:r,id:`${s}-${r}`}); return d; };
 const shuffle   = a  => { const b=[...a]; for(let i=b.length-1;i>0;i--){const j=0|Math.random()*(i+1);[b[i],b[j]]=[b[j],b[i]];} return b; };
 const sortHand  = h  => [...h].sort((a,b)=>a.suit!==b.suit?SUITS.indexOf(a.suit)-SUITS.indexOf(b.suit):RV[a.rank]-RV[b.rank]);
-const beats     = (ch,cur,lead,trump)=>{ if(!cur)return true; const ct=ch.suit===trump,curt=cur.suit===trump; if(ct&&!curt)return true; if(!ct&&curt)return false; if(ch.suit!==cur.suit)return false; return RV[ch.rank]>RV[cur.rank]; };
+const beats     = (ch,cur,lead,trump)=>{ if(!cur)return true; if(!trump||trump==="none"){if(ch.suit!==lead)return false;if(cur.suit!==lead)return true;return RV[ch.rank]>RV[cur.rank];} const ct=ch.suit===trump,curt=cur.suit===trump; if(ct&&!curt)return true; if(!ct&&curt)return false; if(ch.suit!==cur.suit)return false; return RV[ch.rank]>RV[cur.rank]; };
 const calcScore = (b,m) => m>=b ? b*5+(m-b) : b*-5;
 const pct       = n  => `${Math.round(n*100)}%`;
 const fmt1      = n  => n.toFixed(1);
@@ -57,12 +57,12 @@ function evalTrick(cards,lead,trump,players){
 // ─────────────────────────────────────────────────────────────────────────────
 // BOT AI
 // ─────────────────────────────────────────────────────────────────────────────
-function botTrump(hand){let b=SUITS[0],bs=-1;for(const s of SUITS){const sc=hand.filter(c=>c.suit===s).reduce((a,c)=>a+RV[c.rank],0)+hand.filter(c=>c.suit===s).length*2;if(sc>bs){bs=sc;b=s;}}return b;}
-function botEst(hand,trump){let e=0;for(const c of hand){const t=c.suit===trump,v=RV[c.rank];if(c.rank==="A")e+=t?1:.9;else if(c.rank==="K")e+=t?.85:.7;else if(c.rank==="Q")e+=t?.7:.5;else if(v>=8)e+=t?.5:.2;else if(t)e+=.3;}return Math.round(e);}
+function botTrump(hand){let b=SUITS[0],bs=-1;for(const s of SUITS){const sc=hand.filter(c=>c.suit===s).reduce((a,c)=>a+RV[c.rank],0)+hand.filter(c=>c.suit===s).length*2;if(sc>bs){bs=sc;b=s;}}const highCards=hand.filter(c=>RV[c.rank]>=10).length;const avgRank=hand.reduce((a,c)=>a+RV[c.rank],0)/hand.length;if(bs<18&&highCards>=3&&avgRank>=8)return"none";return b;}
+function botEst(hand,trump){let e=0;for(const c of hand){const t=trump&&trump!=="none"&&c.suit===trump,v=RV[c.rank];if(c.rank==="A")e+=t?1:.9;else if(c.rank==="K")e+=t?.85:.7;else if(c.rank==="Q")e+=t?.7:.5;else if(v>=8)e+=t?.5:.2;else if(t)e+=.3;}return Math.round(e);}
 function botPick(hand,trick,lead,trump,bid,made,broken){
   const leading=trick.length===0;let legal=hand;
   if(!leading&&lead){const hs=hand.some(c=>c.suit===lead);legal=hs?hand.filter(c=>c.suit===lead):hand;}
-  if(leading&&!broken){const nt=hand.filter(c=>c.suit!==trump);if(nt.length>0)legal=nt;}
+  if(leading&&trump&&trump!=="none"&&!broken){const nt=hand.filter(c=>c.suit!==trump);if(nt.length>0)legal=nt;}
   let win=trick.length>0?trick[0].card:null;
   for(let i=1;i<trick.length;i++)if(beats(trick[i].card,win,lead,trump))win=trick[i].card;
   const canWin=legal.filter(c=>beats(c,win,lead,trump));const need=made<bid;
@@ -77,7 +77,22 @@ function initHand(gs){
   return{...gs,phase:"BIDDING_INITIAL",hands,trick:[],pendingTrick:null,lastDiscard:null,
     tricksDone:0,trumpSuit:null,trumpBroken:false,bids:{},made:{},highBid:0,highBidder:null,
     currentBidder:(dealer+1)%4,bidsTaken:[],currentPlayer:(dealer+1)%4,leadSuit:null,
-    pendingHandLog:null,afterTrickPhase:null};
+    pendingHandLog:null,afterTrickPhase:null,dealAttempt:gs.dealAttempt||1};
+}
+
+// Called when all 4 players pass. Redeals up to 3 times; on 3rd fail, advances dealer.
+function handleAllPassed(gs,addLog){
+  const attempt=gs.dealAttempt||1;
+  if(attempt<3){
+    // Redeal same hand, same dealer, increment attempt
+    addLog&&addLog(`All passed — redeal #${attempt+1}`);
+    return initHand({...gs,dealAttempt:attempt+1});
+  } else {
+    // 3 strikes — pass deal to next player, reset attempt, same handIndex
+    const newDealer=(gs.dealer+1)%4;
+    addLog&&addLog(`3 failed deals — deal passes to ${gs.players[newDealer].name}`);
+    return initHand({...gs,dealer:newDealer,dealAttempt:1});
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -399,10 +414,12 @@ function NameBadge({player,bid,made,isDealer,isTurn,teamCol,score}){
 }
 
 // Compact player panel replacing side/top card fans
-function PlayerPanel({player,bid,made,isDealer,isTurn,teamCol,score,cardCount,position}){
+function PlayerPanel({player,bid,made,isDealer,isTurn,teamCol,score,cardCount,position,isCaller,trumpSuit}){
   if(!player) return null;
   const isTop=position==="top";
   const glowStyle=isTurn?{boxShadow:"0 0 0 2px #28a028, 0 4px 20px rgba(40,160,40,.4)"}:{boxShadow:"0 2px 12px rgba(0,0,0,.3)"};
+  const trumpLabel=trumpSuit==="none"?"🃏":(trumpSuit?SYM[trumpSuit]:null);
+  const trumpColor=trumpSuit&&trumpSuit!=="none"?(["hearts","diamonds"].includes(trumpSuit)?"#ff8080":"#88ccff"):"#e8cc70";
   return(
     <div style={{display:"flex",flexDirection:isTop?"row":"column",alignItems:"center",gap:isTop?16:8,
       background:"rgba(0,0,0,.45)",backdropFilter:"blur(6px)",
@@ -424,6 +441,7 @@ function PlayerPanel({player,bid,made,isDealer,isTurn,teamCol,score,cardCount,po
           <span style={{color:"#fff",fontSize:13,fontWeight:700,whiteSpace:"nowrap"}}>{player.name.split(" ")[0]}</span>
           {player.isBot&&<span style={{fontSize:11}}>🤖</span>}
           {isDealer&&<span style={{background:"rgba(255,255,255,.25)",color:"#fff",fontSize:8,padding:"1px 5px",borderRadius:3,fontWeight:700,letterSpacing:.5}}>D</span>}
+          {isCaller&&trumpLabel&&<span style={{background:"rgba(0,0,0,.4)",border:"1px solid rgba(255,255,255,.2)",borderRadius:4,padding:"1px 5px",fontSize:11,color:trumpColor,fontWeight:700,letterSpacing:.3}}>{trumpLabel}</span>}
           {isTurn&&<span style={{width:7,height:7,borderRadius:"50%",background:"#28a028",display:"inline-block",boxShadow:"0 0 8px #28a028",flexShrink:0}}/>}
         </div>
         <div style={{color:"rgba(255,255,255,.55)",fontSize:10,marginTop:2,whiteSpace:"nowrap"}}>
@@ -438,6 +456,32 @@ function PlayerPanel({player,bid,made,isDealer,isTurn,teamCol,score,cardCount,po
             🂠 {cardCount}
           </span>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Compact chip for side players on mobile
+function MobileChip({player,bid,made,isDealer,isTurn,teamCol,cardCount}){
+  if(!player) return null;
+  return(
+    <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:3,
+      background:"rgba(0,0,0,.5)",backdropFilter:"blur(4px)",
+      border:`1.5px solid ${isTurn?"#28a028":teamCol+"88"}`,
+      borderRadius:10,padding:"5px 7px",minWidth:54,
+      boxShadow:isTurn?"0 0 0 2px #28a028,0 2px 10px rgba(40,160,40,.3)":"0 1px 6px rgba(0,0,0,.3)"}}>
+      <div style={{width:30,height:30,borderRadius:"50%",background:teamCol,overflow:"hidden",
+        display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:700,color:"#fff",
+        boxShadow:`0 0 0 1.5px ${isTurn?"#28a028":"rgba(255,255,255,.2)"}`}}>
+        {player.avatarUrl
+          ?<img src={player.avatarUrl} alt={player.name} style={{width:"100%",height:"100%",objectFit:"cover"}}/>
+          :player.name[0].toUpperCase()}
+      </div>
+      <div style={{color:"#fff",fontSize:9,fontWeight:700,whiteSpace:"nowrap",maxWidth:52,overflow:"hidden",textOverflow:"ellipsis"}}>
+        {player.name.split(" ")[0]}{isDealer?" D":""}{isTurn?" ●":""}
+      </div>
+      <div style={{color:"rgba(255,255,255,.9)",fontSize:11,fontWeight:700,lineHeight:1}}>
+        {made??0}<span style={{color:"rgba(255,255,255,.4)",fontSize:9}}>/{bid??'?'}</span>
       </div>
     </div>
   );
@@ -1079,10 +1123,11 @@ function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,di
     const{trick,leadSuit,hands,players,currentPlayer,trumpSuit,trumpBroken,tricksDone,handIndex,made,bids,scores}=gs;
     const rule=HAND_RULES[handIndex],myHand=hands[players[viewAs].id];
     if(trick.length>0){const hs=myHand.some(c=>c.suit===leadSuit);if(hs&&card.suit!==leadSuit){alert("Must follow suit!");setStaged(null);return;}}
-    if(trick.length===0&&card.suit===trumpSuit&&!trumpBroken&&myHand.some(c=>c.suit!==trumpSuit)){alert("Trump not broken yet!");setStaged(null);return;}
+    const isHighCard=!trumpSuit||trumpSuit==="none";
+    if(!isHighCard&&trick.length===0&&card.suit===trumpSuit&&!trumpBroken&&myHand.some(c=>c.suit!==trumpSuit)){alert("Trump not broken yet!");setStaged(null);return;}
     const nt=[...trick,{playerId:players[viewAs].id,card}];
     const nl=trick.length===0?card.suit:leadSuit;
-    const nb=trumpBroken||(card.suit===trumpSuit&&trick.length>0&&leadSuit!==trumpSuit);
+    const nb=trumpBroken||(!isHighCard&&card.suit===trumpSuit&&trick.length>0&&leadSuit!==trumpSuit);
     addLog(`${players[viewAs].name} plays ${card.rank}${SYM[card.suit]}`);
     let nx={...gs,trick:nt,hands:{...hands,[players[viewAs].id]:myHand.filter(c=>c.id!==card.id)},leadSuit:nl,trumpBroken:nb,currentPlayer:(currentPlayer+1)%4};
     if(nt.length===4){
@@ -1091,10 +1136,26 @@ function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,di
       addLog(`→ ${winnerName} wins trick ${nx.tricksDone}/${rule.cards}`);
       nx.pendingTrick={cards:nt,winnerId,winnerIdx,winnerName};
       if(nx.tricksDone>=rule.cards){
+        // Check sweep: caller bid all tricks AND personally won all of them
+        const callerId=nx.highBidder!=null?players[nx.highBidder]?.id:null;
+        const isSweep=callerId&&(nx.bids[callerId]||0)===rule.cards&&(nx.made[callerId]||0)===rule.cards;
         const hLog={},ns={...scores};
         for(const p of players){const c=nx.bids[p.id]||0,m=nx.made[p.id]||0,d=calcScore(c,m);ns[p.id]=(ns[p.id]||0)+d;hLog[p.id]={called:c,made:m,delta:d};}
+        if(isSweep){
+          // Ensure caller's team total > opponent's team total
+          const callerTeam=tOf(nx.highBidder);
+          const ai0=callerTeam===0?0:1,ai1=callerTeam===0?2:3;
+          const oi0=callerTeam===0?1:0,oi1=callerTeam===0?3:2;
+          const callerTotal=(ns[players[ai0]?.id]||0)+(ns[players[ai1]?.id]||0);
+          const oppTotal=(ns[players[oi0]?.id]||0)+(ns[players[oi1]?.id]||0);
+          if(callerTotal<=oppTotal){
+            const bonus=oppTotal+1-callerTotal;
+            [players[ai0]?.id,players[ai1]?.id].forEach(pid=>{if(pid){const add=Math.ceil(bonus/2);ns[pid]=(ns[pid]||0)+add;hLog[pid]={...hLog[pid],delta:(hLog[pid]?.delta||0)+add};}});
+          }
+          addLog(`🌟 SWEEP! ${players[nx.highBidder].name} wins all ${rule.cards} tricks — instant game win!`);
+        }
         nx.scores=ns;nx.handScoreLog=[...(nx.handScoreLog||[]),{hand:handIndex+1,log:hLog}];
-        nx.pendingHandLog=hLog;nx.afterTrickPhase=nx.handIndex>=12?"GAME_OVER":"HAND_SCORE";
+        nx.pendingHandLog=hLog;nx.sweepWin=isSweep||false;nx.afterTrickPhase=isSweep?"GAME_OVER":(nx.handIndex>=12?"GAME_OVER":"HAND_SCORE");
       }
     }
     setGs(nx);
@@ -1115,9 +1176,9 @@ function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,di
       const pid=players[ai].id,bt=[...(bidsTaken||[]),ai];
       const gt=botTrump(hands[pid]),est=botEst(hands[pid],gt),mn=Math.max(rule.minBid,(highBid||0)+1);
       if(est>=mn){nx.highBid=est;nx.highBidder=ai;nx.bids[pid]=est;nx.bidsTaken=bt;addLog(`${players[ai].name} bids ${est}`);const rem=[0,1,2,3].filter(i=>!bt.includes(i));if(!rem.length)nx.phase="SET_TRUMP";else nx.currentBidder=rem[0];}
-      else{addLog(`${players[ai].name} passes`);nx.bidsTaken=bt;const rem=[0,1,2,3].filter(i=>!bt.includes(i));if(!rem.length){if(nx.highBidder==null){nx.highBidder=dealer;nx.highBid=rule.minBid;nx.bids[players[dealer].id]=rule.minBid;addLog(`${players[dealer].name} forced ${rule.minBid}`);}nx.phase="SET_TRUMP";}else nx.currentBidder=rem[0];}
+      else{addLog(`${players[ai].name} passes`);nx.bidsTaken=bt;const rem=[0,1,2,3].filter(i=>!bt.includes(i));if(!rem.length){if(nx.highBidder==null){nx=handleAllPassed(nx,addLog);}else nx.phase="SET_TRUMP";}else nx.currentBidder=rem[0];}
     }else if(phase==="SET_TRUMP"){
-      const tr=botTrump(hands[players[ai].id]);nx.trumpSuit=tr;nx.phase="BIDDING_OTHERS";nx.currentBidder=[1,2,3].map(o=>(ai+o)%4)[0];addLog(`${players[ai].name} sets trump: ${tr}`);
+      const tr=botTrump(hands[players[ai].id]);nx.trumpSuit=tr;nx.phase="BIDDING_OTHERS";nx.currentBidder=[1,2,3].map(o=>(ai+o)%4)[0];addLog(`${players[ai].name} sets trump: ${tr==="none"?"High Card":tr}`);
     }else if(phase==="BIDDING_OTHERS"){
       const pid=players[ai].id;nx.bids[pid]=Math.max(0,Math.min(botEst(hands[pid],trumpSuit),rule.cards));addLog(`${players[ai].name} bids ${nx.bids[pid]}`);
       const hbo=[1,2,3].map(o=>(highBidder+o)%4),done=Object.keys(nx.bids).map(p2=>players.findIndex(p=>p.id===p2)),nb=hbo.find(i=>!done.includes(i));
@@ -1126,7 +1187,8 @@ function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,di
       const pid=players[ai].id,hand=hands[pid];if(!hand?.length)return;
       const card=botPick(hand,trick,leadSuit,trumpSuit,bids[pid]||0,made[pid]||0,trumpBroken);
       const nt=[...trick,{playerId:pid,card}],nl=trick.length===0?card.suit:leadSuit;
-      const nb=trumpBroken||(card.suit===trumpSuit&&trick.length>0&&leadSuit!==trumpSuit);
+      const isHighCard=!trumpSuit||trumpSuit==="none";
+      const nb=trumpBroken||(!isHighCard&&card.suit===trumpSuit&&trick.length>0&&leadSuit!==trumpSuit);
       nx.trick=nt;nx.hands[pid]=hand.filter(c=>c.id!==card.id);nx.leadSuit=nl;nx.trumpBroken=nb;nx.currentPlayer=(ai+1)%4;
       addLog(`${players[ai].name} plays ${card.rank}${SYM[card.suit]}`);
       if(nt.length===4){
@@ -1134,9 +1196,23 @@ function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,di
         nx.made[winnerId]=(nx.made[winnerId]||0)+1;nx.tricksDone=(tricksDone||0)+1;addLog(`→ ${winnerName} wins trick ${nx.tricksDone}/${rule.cards}`);
         nx.pendingTrick={cards:nt,winnerId,winnerIdx,winnerName};
         if(nx.tricksDone>=rule.cards){
+          const callerId=nx.highBidder!=null?players[nx.highBidder]?.id:null;
+          const isSweep=callerId&&(nx.bids[callerId]||0)===rule.cards&&(nx.made[callerId]||0)===rule.cards;
           const hLog={},ns={...nx.scores};
           for(const p of players){const c=nx.bids[p.id]||0,m=nx.made[p.id]||0,d=calcScore(c,m);ns[p.id]=(ns[p.id]||0)+d;hLog[p.id]={called:c,made:m,delta:d};}
-          nx.scores=ns;nx.handScoreLog=[...(nx.handScoreLog||[]),{hand:nx.handIndex+1,log:hLog}];nx.pendingHandLog=hLog;nx.afterTrickPhase=nx.handIndex>=12?"GAME_OVER":"HAND_SCORE";
+          if(isSweep){
+            const callerTeam=tOf(nx.highBidder);
+            const ai0=callerTeam===0?0:1,ai1=callerTeam===0?2:3;
+            const oi0=callerTeam===0?1:0,oi1=callerTeam===0?3:2;
+            const callerTotal=(ns[players[ai0]?.id]||0)+(ns[players[ai1]?.id]||0);
+            const oppTotal=(ns[players[oi0]?.id]||0)+(ns[players[oi1]?.id]||0);
+            if(callerTotal<=oppTotal){
+              const bonus=oppTotal+1-callerTotal;
+              [players[ai0]?.id,players[ai1]?.id].forEach(pid2=>{if(pid2){const add=Math.ceil(bonus/2);ns[pid2]=(ns[pid2]||0)+add;hLog[pid2]={...hLog[pid2],delta:(hLog[pid2]?.delta||0)+add};}});
+            }
+            addLog(`🌟 SWEEP! ${players[nx.highBidder].name} wins all ${rule.cards} tricks — instant game win!`);
+          }
+          nx.scores=ns;nx.handScoreLog=[...(nx.handScoreLog||[]),{hand:nx.handIndex+1,log:hLog}];nx.pendingHandLog=hLog;nx.sweepWin=isSweep||false;nx.afterTrickPhase=isSweep?"GAME_OVER":(nx.handIndex>=12?"GAME_OVER":"HAND_SCORE");
         }
       }
     }
@@ -1159,7 +1235,7 @@ function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,di
     if(!gs)return;let nx={...gs,bids:{...gs.bids}};
     const{currentBidder,highBid,players,bidsTaken,dealer}=nx,rule=HAND_RULES[nx.handIndex];
     const pid=players[currentBidder].id,bt=[...(bidsTaken||[]),currentBidder];
-    if(val==="pass"){addLog(`${players[currentBidder].name} passes`);nx.bidsTaken=bt;const rem=[0,1,2,3].filter(i=>!bt.includes(i));if(!rem.length){if(nx.highBidder==null){nx.highBidder=dealer;nx.highBid=rule.minBid;nx.bids[players[dealer].id]=rule.minBid;addLog(`${players[dealer].name} forced ${rule.minBid}`);}nx.phase="SET_TRUMP";}else nx.currentBidder=rem[0];}
+    if(val==="pass"){addLog(`${players[currentBidder].name} passes`);nx.bidsTaken=bt;const rem=[0,1,2,3].filter(i=>!bt.includes(i));if(!rem.length){if(nx.highBidder==null){nx=handleAllPassed(nx,addLog);}else nx.phase="SET_TRUMP";}else nx.currentBidder=rem[0];}
     else{const v=parseInt(val);nx.highBid=v;nx.highBidder=currentBidder;nx.bids[pid]=v;nx.bidsTaken=bt;addLog(`${players[currentBidder].name} bids ${v}`);const rem=[0,1,2,3].filter(i=>!bt.includes(i));if(!rem.length)nx.phase="SET_TRUMP";else nx.currentBidder=rem[0];}
     setGs(nx);
   }
@@ -1171,11 +1247,11 @@ function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,di
     if(nb===undefined){nx.phase="PLAYING";nx.currentPlayer=(nx.dealer+1)%4;nx.made=Object.fromEntries(players.map(p=>[p.id,0]));nx.trick=[];nx.leadSuit=null;addLog("Play begins");}else nx.currentBidder=nb;
     setGs(nx);
   }
-  function nextHand(){if(!gs)return;setStaged(null);setGs(initHand({...gs,handIndex:gs.handIndex+1,dealer:(gs.dealer+1)%4}));}
+  function nextHand(){if(!gs)return;setStaged(null);setGs(initHand({...gs,handIndex:gs.handIndex+1,dealer:(gs.dealer+1)%4,dealAttempt:1}));}
 
   if(!gs)return null;
   const{players,phase,trick,trumpSuit,trumpBroken,bids,made,scores,handIndex,dealer,
-        currentBidder,highBid,highBidder,currentPlayer,leadSuit,pendingTrick,lastDiscard,pendingHandLog}=gs;
+        currentBidder,highBid,highBidder,currentPlayer,leadSuit,pendingTrick,lastDiscard,pendingHandLog,sweepWin}=gs;
   const rule=HAND_RULES[handIndex];
 
   // Game over
@@ -1184,8 +1260,9 @@ function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,di
     return(
       <div style={{minHeight:"100vh",background:"#2a5e2a",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Georgia,serif",backgroundImage:"radial-gradient(ellipse,#3a7a3a,#1a4a1a)"}}>
         <div style={{width:460,padding:36,background:"rgba(255,255,255,.96)",borderRadius:18,boxShadow:"0 10px 40px rgba(0,0,0,.3)",textAlign:"center"}}>
-          <div style={{fontSize:54,marginBottom:8}}>🏆</div>
+          <div style={{fontSize:54,marginBottom:8}}>{sweepWin?"🌟":"🏆"}</div>
           <div style={{fontSize:28,fontWeight:700,marginBottom:4}}>Game Over!</div>
+          {sweepWin&&<div style={{background:"#fffbe0",border:"2px solid #e8c830",borderRadius:10,padding:"8px 16px",marginBottom:12,fontSize:13,color:"#7a5800",fontWeight:700}}>⚡ SWEEP — All tricks taken for an instant win!</div>}
           <div style={{color:"#8a6a10",fontSize:16,marginBottom:24}}>{winner!=null?`${tNamesMut[winner]} Wins!`:"It's a Tie!"}</div>
           <div style={{display:"flex",justifyContent:"center",gap:20,marginBottom:24}}>
             {[0,1].map(ti=>(
@@ -1239,42 +1316,48 @@ function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,di
   const isMyTurn=phase==="PLAYING"&&players[currentPlayer]?.id===players[viewAs]?.id&&!pendingTrick&&!staged;
   const isMyBidTurn=(phase==="BIDDING_INITIAL"&&players[currentBidder]?.id===players[viewAs]?.id)||(phase==="SET_TRUMP"&&players[highBidder]?.id===players[viewAs]?.id)||(phase==="BIDDING_OTHERS"&&players[currentBidder]?.id===players[viewAs]?.id);
   const actor=phase==="BIDDING_INITIAL"?players[currentBidder]?.name:phase==="SET_TRUMP"?players[highBidder]?.name:phase==="BIDDING_OTHERS"?players[currentBidder]?.name:players[currentPlayer]?.name;
-  const status=pendingTrick?`🏆 ${pendingTrick.winnerName} wins the trick!`:staged?`Card placed — tap to reveal`:phase==="BIDDING_INITIAL"?(isMyBidTurn?`Your bid (min ${Math.max(rule.minBid,(highBid||0)+1)})`:`${actor} is bidding…`):phase==="SET_TRUMP"?(isMyBidTurn?`You won (${highBid}) — choose trump`:`${actor} setting trump…`):phase==="BIDDING_OTHERS"?(isMyBidTurn?`Bid (0–${rule.cards})`:`${actor} is bidding…`):(isMyTurn?`Your turn — drag to center`:`${actor}'s turn…`);
+  const dealAttemptStr=gs.dealAttempt>1?` (deal ${gs.dealAttempt}/3)`:"";
+  const status=pendingTrick?`🏆 ${pendingTrick.winnerName} wins the trick!`:staged?`Card placed — tap to reveal`:phase==="BIDDING_INITIAL"?(isMyBidTurn?`Your bid (min ${Math.max(rule.minBid,(highBid||0)+1)})${dealAttemptStr}`:`${actor} is bidding…${dealAttemptStr}`):phase==="SET_TRUMP"?(isMyBidTurn?`You won (${highBid}) — choose trump or High Card`:`${actor} setting trump…`):phase==="BIDDING_OTHERS"?(isMyBidTurn?`Bid (0–${rule.cards})`:`${actor} is bidding…`):(isMyTurn?`Your turn — drag to center`:`${actor}'s turn…`);
   const ts0=(scores.p0||0)+(scores.p2||0),ts1=(scores.p1||0)+(scores.p3||0);
   const isTurn=pi=>(phase==="PLAYING"&&currentPlayer===pi)||(phase==="BIDDING_INITIAL"&&currentBidder===pi)||(phase==="BIDDING_OTHERS"&&currentBidder===pi);
+
+  const isMobile=window.innerWidth<=640;
 
   return(
     <div style={{height:"100vh",display:"flex",flexDirection:"column",fontFamily:"Georgia,serif",overflow:"hidden",background:"radial-gradient(ellipse at 50% 40%, #3a7a3a 0%, #1a4a1a 100%)",position:"relative"}}>
 
       {/* ── HEADER ── */}
-      <div style={{background:"rgba(0,0,0,.6)",backdropFilter:"blur(8px)",padding:"6px 20px",display:"flex",alignItems:"center",gap:12,flexShrink:0,borderBottom:"1px solid rgba(255,255,255,.08)"}}>
-        <span style={{color:"#f0e6c8",fontWeight:700,fontSize:18,letterSpacing:4,marginRight:4}}>OKIE</span>
-        <span style={{color:"rgba(255,255,255,.4)",fontSize:11,borderLeft:"1px solid rgba(255,255,255,.12)",paddingLeft:12}}>Hand {handIndex+1}/13 · {rule.cards} cards</span>
+      <div style={{background:"rgba(0,0,0,.6)",backdropFilter:"blur(8px)",padding:isMobile?"4px 10px":"6px 20px",display:"flex",alignItems:"center",gap:isMobile?6:12,flexShrink:0,borderBottom:"1px solid rgba(255,255,255,.08)"}}>
+        <span style={{color:"#f0e6c8",fontWeight:700,fontSize:isMobile?14:18,letterSpacing:isMobile?2:4,marginRight:2}}>OKIE</span>
+        <span style={{color:"rgba(255,255,255,.4)",fontSize:isMobile?9:11,borderLeft:"1px solid rgba(255,255,255,.12)",paddingLeft:isMobile?6:12,whiteSpace:"nowrap"}}>H{handIndex+1}/13 · {rule.cards}c</span>
 
         {/* Trump pill */}
         {trumpSuit&&(
-          <div style={{display:"flex",alignItems:"center",gap:6,background:"rgba(255,255,255,.1)",borderRadius:20,padding:"3px 12px",border:"1px solid rgba(255,255,255,.15)"}}>
-            <span style={{color:"rgba(255,255,255,.45)",fontSize:9,letterSpacing:1}}>TRUMP</span>
-            <span style={{fontSize:20,color:["hearts","diamonds"].includes(trumpSuit)?"#ff7070":"#88ccff",lineHeight:1}}>{SYM[trumpSuit]}</span>
-            <span style={{color:"#e8cc70",fontSize:11,fontWeight:700}}>{trumpSuit.charAt(0).toUpperCase()+trumpSuit.slice(1)}</span>
-            <span style={{fontSize:9,color:trumpBroken?"#80e880":"rgba(255,255,255,.3)",marginLeft:2}}>{trumpBroken?"broken":"locked"}</span>
+          <div style={{display:"flex",alignItems:"center",gap:isMobile?3:6,background:"rgba(255,255,255,.1)",borderRadius:20,padding:isMobile?"2px 7px":"3px 12px",border:"1px solid rgba(255,255,255,.15)"}}>
+            {!isMobile&&<span style={{color:"rgba(255,255,255,.45)",fontSize:9,letterSpacing:1}}>TRUMP</span>}
+            {trumpSuit==="none"
+              ?<span style={{color:"#e8cc70",fontSize:isMobile?11:12,fontWeight:700,letterSpacing:.5}}>🃏 HIGH CARD</span>
+              :<><span style={{fontSize:isMobile?16:20,color:["hearts","diamonds"].includes(trumpSuit)?"#ff7070":"#88ccff",lineHeight:1}}>{SYM[trumpSuit]}</span>
+                {!isMobile&&<span style={{color:"#e8cc70",fontSize:11,fontWeight:700}}>{trumpSuit.charAt(0).toUpperCase()+trumpSuit.slice(1)}</span>}
+                <span style={{fontSize:9,color:trumpBroken?"#80e880":"rgba(255,255,255,.3)"}}>{trumpBroken?"🔓":"🔒"}</span></>
+            }
           </div>
         )}
 
-        {/* Team scores — prominent */}
-        <div style={{display:"flex",gap:6,marginLeft:4}}>
+        {/* Team scores */}
+        <div style={{display:"flex",gap:isMobile?4:6,marginLeft:isMobile?0:4}}>
           {[0,1].map(ti=>(
-            <div key={ti} style={{display:"flex",alignItems:"center",gap:7,background:"rgba(255,255,255,.09)",border:`1.5px solid ${tc(ti)}66`,borderRadius:10,padding:"3px 12px"}}>
-              <div style={{width:8,height:8,borderRadius:"50%",background:tc(ti)}}/>
-              {editT===ti?(
+            <div key={ti} style={{display:"flex",alignItems:"center",gap:isMobile?4:7,background:"rgba(255,255,255,.09)",border:`1.5px solid ${tc(ti)}66`,borderRadius:10,padding:isMobile?"2px 7px":"3px 12px"}}>
+              <div style={{width:7,height:7,borderRadius:"50%",background:tc(ti)}}/>
+              {!isMobile&&(editT===ti?(
                 <input autoFocus value={tIn} onChange={e=>setTI(e.target.value)}
                   onKeyDown={e=>{if(e.key==="Enter"){setTNM(n=>{const c=[...n];c[ti]=tIn||n[ti];return c;});setET(null);}if(e.key==="Escape")setET(null);}}
                   onBlur={()=>{setTNM(n=>{const c=[...n];c[ti]=tIn||n[ti];return c;});setET(null);}}
                   style={{width:70,background:"none",border:"none",borderBottom:`1px solid ${tc(ti)}`,color:"#f0e6c8",fontFamily:"Georgia,serif",fontSize:11,outline:"none"}}/>
               ):(
                 <span style={{color:"rgba(255,255,255,.7)",fontSize:11,cursor:"pointer"}} onClick={()=>{setET(ti);setTI(tNamesMut[ti]);}}>{tNamesMut[ti]}</span>
-              )}
-              <span style={{color:"#fff",fontWeight:700,fontSize:16,minWidth:20,textAlign:"right"}}>{ti===0?ts0:ts1}</span>
+              ))}
+              <span style={{color:"#fff",fontWeight:700,fontSize:isMobile?13:16,minWidth:16,textAlign:"right"}}>{ti===0?ts0:ts1}</span>
             </div>
           ))}
         </div>
@@ -1295,140 +1378,185 @@ function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,di
         </div>}
 
         {/* Main table area */}
-        <div style={{flex:1,display:"flex",flexDirection:"column",minWidth:0,padding:"8px 16px 6px",gap:6}}>
+        <div style={{flex:1,display:"flex",flexDirection:"column",minWidth:0,padding:isMobile?"4px 6px 2px":"8px 16px 6px",gap:isMobile?3:6}}>
 
-          {/* ── TOP: Partner panel ── */}
-          <div style={{display:"flex",justifyContent:"center",flexShrink:0}}>
-            <PlayerPanel position="top"
-              player={players[partIdx]} bid={bids[players[partIdx]?.id]} made={made[players[partIdx]?.id]||0}
-              isDealer={dealer===partIdx} isTurn={isTurn(partIdx)}
-              score={scores[players[partIdx]?.id]||0} teamCol={tc(tOf(partIdx))}
-              cardCount={gs.hands[players[partIdx]?.id]?.length||0}/>
-          </div>
-
-          {/* ── MIDDLE ROW ── */}
-          <div style={{flex:1,display:"flex",alignItems:"center",gap:12,minHeight:0}}>
-
-            {/* Left player — vertically centered */}
-            <div style={{flexShrink:0,alignSelf:"center"}}>
-              <PlayerPanel position="side"
-                player={players[leftIdx]} bid={bids[players[leftIdx]?.id]} made={made[players[leftIdx]?.id]||0}
-                isDealer={dealer===leftIdx} isTurn={isTurn(leftIdx)}
-                score={scores[players[leftIdx]?.id]||0} teamCol={tc(tOf(leftIdx))}
-                cardCount={gs.hands[players[leftIdx]?.id]?.length||0}/>
-            </div>
-
-            {/* ── CENTER COLUMN: status + trick zone only ── */}
-            <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:6,minWidth:0}}>
-
-              {/* Status banner removed — moved to bottom-left HUD */}
-
-              {/* ── TRICK ZONE ── */}
-              <div onDragOver={e=>{e.preventDefault();setGlow(true);}}
-                onDrop={e=>{e.preventDefault();setGlow(false);const src=e.dataTransfer.getData("source"),idx=parseInt(e.dataTransfer.getData("cardIndex"));if(src==="hand"&&!isNaN(idx)&&isMyTurn)stageCard(myHand[idx]);}}
-                onDragLeave={()=>setGlow(false)}
-                style={{position:"relative",width:260,height:220,
-                  background:glow?"rgba(80,200,80,.07)":"rgba(0,0,0,.18)",
-                  border:glow?"2px dashed rgba(80,200,80,.6)":isMyTurn?"2px dashed rgba(255,255,255,.22)":"1px solid rgba(255,255,255,.08)",
-                  borderRadius:24,flexShrink:0,transition:"all .15s",
-                  boxShadow:"inset 0 2px 16px rgba(0,0,0,.2)"}}>
-
-                {/* Partner (top) */}
-                <div style={{position:"absolute",top:10,left:"50%",transform:"translateX(-50%)"}}>
-                  {tByP[players[partIdx]?.id]
-                    ?<CardFace card={tByP[players[partIdx].id]} small highlight={pendingTrick?.winnerId===players[partIdx]?.id} disabled/>
-                    :<div style={{width:54,height:78,border:"1px dashed rgba(255,255,255,.15)",borderRadius:9}}/>}
-                </div>
-                {/* Left */}
-                <div style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)"}}>
-                  {tByP[players[leftIdx]?.id]
-                    ?<CardFace card={tByP[players[leftIdx].id]} small highlight={pendingTrick?.winnerId===players[leftIdx]?.id} disabled/>
-                    :<div style={{width:54,height:78,border:"1px dashed rgba(255,255,255,.15)",borderRadius:9}}/>}
-                </div>
-                {/* Right */}
-                <div style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)"}}>
-                  {tByP[players[rightIdx]?.id]
-                    ?<CardFace card={tByP[players[rightIdx].id]} small highlight={pendingTrick?.winnerId===players[rightIdx]?.id} disabled/>
-                    :<div style={{width:54,height:78,border:"1px dashed rgba(255,255,255,.15)",borderRadius:9}}/>}
-                </div>
-                {/* Me (bottom) */}
-                <div style={{position:"absolute",bottom:10,left:"50%",transform:"translateX(-50%)"}}>
-                  {staged&&!tByP[players[viewAs]?.id]
-                    ?<div onClick={reveal} style={{cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
-                        <CardBack small glow/>
-                        <span style={{color:"#e8d050",fontSize:9,background:"rgba(0,0,0,.6)",borderRadius:4,padding:"2px 6px",whiteSpace:"nowrap",fontWeight:700}}>tap to reveal</span>
-                      </div>
-                    :tByP[players[viewAs]?.id]
-                      ?<div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
-                          <CardFace card={tByP[players[viewAs].id]} small highlight={pendingTrick?.winnerId===players[viewAs]?.id} disabled/>
-                          {pendingTrick?.winnerId===players[viewAs]?.id&&<span style={{color:"#28c028",fontSize:9,background:"rgba(255,255,255,.9)",borderRadius:4,padding:"2px 6px",fontWeight:700}}>✓ you win!</span>}
-                        </div>
-                      :<div style={{width:54,height:78,
-                          border:isMyTurn?"2px dashed rgba(100,220,100,.5)":"1px dashed rgba(255,255,255,.15)",
-                          borderRadius:9,background:isMyTurn?"rgba(80,200,80,.06)":"transparent",transition:"all .15s"}}/>}
-                </div>
-                {pendingTrick&&<div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",
-                  color:"#50e050",fontSize:12,fontWeight:700,background:"rgba(0,0,0,.7)",
-                  borderRadius:10,padding:"3px 12px",whiteSpace:"nowrap",pointerEvents:"none",
-                  border:"1px solid rgba(80,224,80,.3)"}}>🏆 {pendingTrick.winnerName}</div>}
-                {isMyTurn&&!staged&&!Object.keys(tByP).length&&
-                  <div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",
-                    color:"rgba(255,255,255,.18)",fontSize:12,textAlign:"center",pointerEvents:"none",lineHeight:1.6}}>
-                    drag a card here
-                  </div>}
+          {isMobile?(
+            /* ══ MOBILE LAYOUT ══ */
+            <>
+              {/* Top row: partner chip centered */}
+              <div style={{display:"flex",justifyContent:"center",flexShrink:0}}>
+                <MobileChip player={players[partIdx]} bid={bids[players[partIdx]?.id]} made={made[players[partIdx]?.id]||0}
+                  isDealer={dealer===partIdx} isTurn={isTurn(partIdx)}
+                  teamCol={tc(tOf(partIdx))} cardCount={gs.hands[players[partIdx]?.id]?.length||0}/>
               </div>
 
-              {/* Discard/undo/unstage moved to bottom-left HUD */}
-            </div>
+              {/* Middle: left chip | trick zone | right chip */}
+              <div style={{flex:1,display:"flex",alignItems:"center",gap:4,minHeight:0}}>
+                <div style={{flexShrink:0}}>
+                  <MobileChip player={players[leftIdx]} bid={bids[players[leftIdx]?.id]} made={made[players[leftIdx]?.id]||0}
+                    isDealer={dealer===leftIdx} isTurn={isTurn(leftIdx)}
+                    teamCol={tc(tOf(leftIdx))} cardCount={gs.hands[players[leftIdx]?.id]?.length||0}/>
+                </div>
 
-            {/* Right player */}
-            <div style={{flexShrink:0,alignSelf:"center"}}>
-              <PlayerPanel position="side"
-                player={players[rightIdx]} bid={bids[players[rightIdx]?.id]} made={made[players[rightIdx]?.id]||0}
-                isDealer={dealer===rightIdx} isTurn={isTurn(rightIdx)}
-                score={scores[players[rightIdx]?.id]||0} teamCol={tc(tOf(rightIdx))}
-                cardCount={gs.hands[players[rightIdx]?.id]?.length||0}/>
-            </div>
-          </div>
-
-          {/* ── BOTTOM: hand row with my panel anchored bottom-right ── */}
-          <div style={{flexShrink:0,paddingBottom:4,position:"relative"}}>
-            {/* Bid panels — centered above hand */}
-            {!pendingTrick&&phase==="BIDDING_INITIAL"&&players[currentBidder]?.id===players[viewAs]?.id&&(
-              <div style={{display:"flex",justifyContent:"center",marginBottom:6}}>
-                <BidPanel min={Math.max(rule.minBid,(highBid||0)+1)} max={rule.cards} isInitial onBid={humanBid}/>
-              </div>
-            )}
-            {!pendingTrick&&phase==="SET_TRUMP"&&players[highBidder]?.id===players[viewAs]?.id&&(
-              <div style={{display:"flex",justifyContent:"center",marginBottom:6}}>
-                <div style={{background:"rgba(255,255,255,.95)",border:"2px solid #c8b880",borderRadius:14,padding:"12px 20px",textAlign:"center",boxShadow:"0 8px 24px rgba(0,0,0,.3)"}}>
-                  <div style={{color:"#4a3810",fontSize:11,letterSpacing:1,marginBottom:10,fontWeight:700}}>CHOOSE TRUMP SUIT</div>
-                  <div style={{display:"flex",gap:10,justifyContent:"center",marginBottom:12}}>
-                    {SUITS.map(s=><button key={s} onClick={()=>setTP(s)} style={{background:tPick===s?"#fff":"rgba(255,255,255,.5)",border:tPick===s?`2.5px solid ${SCLR[s]}`:"2px solid #ddd",borderRadius:10,padding:"8px 16px",cursor:"pointer",color:SCLR[s],fontSize:28,transition:"all .12s",boxShadow:tPick===s?`0 2px 10px ${SCLR[s]}44`:"none"}}>{SYM[s]}</button>)}
+                {/* Trick zone — fills available width */}
+                <div style={{flex:1,display:"flex",justifyContent:"center"}}>
+                  <div onDragOver={e=>{e.preventDefault();setGlow(true);}}
+                    onDrop={e=>{e.preventDefault();setGlow(false);const src=e.dataTransfer.getData("source"),idx=parseInt(e.dataTransfer.getData("cardIndex"));if(src==="hand"&&!isNaN(idx)&&isMyTurn)stageCard(myHand[idx]);}}
+                    onDragLeave={()=>setGlow(false)}
+                    style={{position:"relative",width:"100%",maxWidth:200,aspectRatio:"1/0.85",
+                      background:glow?"rgba(80,200,80,.07)":"rgba(0,0,0,.18)",
+                      border:glow?"2px dashed rgba(80,200,80,.6)":isMyTurn?"2px dashed rgba(255,255,255,.22)":"1px solid rgba(255,255,255,.08)",
+                      borderRadius:16,transition:"all .15s",boxShadow:"inset 0 2px 12px rgba(0,0,0,.2)"}}>
+                    {/* Partner top */}
+                    <div style={{position:"absolute",top:6,left:"50%",transform:"translateX(-50%)"}}>
+                      {tByP[players[partIdx]?.id]?<CardFace card={tByP[players[partIdx].id]} small highlight={pendingTrick?.winnerId===players[partIdx]?.id} disabled/>:<div style={{width:44,height:62,border:"1px dashed rgba(255,255,255,.15)",borderRadius:7}}/>}
+                    </div>
+                    {/* Left */}
+                    <div style={{position:"absolute",left:6,top:"50%",transform:"translateY(-50%)"}}>
+                      {tByP[players[leftIdx]?.id]?<CardFace card={tByP[players[leftIdx].id]} small highlight={pendingTrick?.winnerId===players[leftIdx]?.id} disabled/>:<div style={{width:44,height:62,border:"1px dashed rgba(255,255,255,.15)",borderRadius:7}}/>}
+                    </div>
+                    {/* Right */}
+                    <div style={{position:"absolute",right:6,top:"50%",transform:"translateY(-50%)"}}>
+                      {tByP[players[rightIdx]?.id]?<CardFace card={tByP[players[rightIdx].id]} small highlight={pendingTrick?.winnerId===players[rightIdx]?.id} disabled/>:<div style={{width:44,height:62,border:"1px dashed rgba(255,255,255,.15)",borderRadius:7}}/>}
+                    </div>
+                    {/* Me bottom */}
+                    <div style={{position:"absolute",bottom:6,left:"50%",transform:"translateX(-50%)"}}>
+                      {staged&&!tByP[players[viewAs]?.id]
+                        ?<div onClick={reveal} style={{cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+                            <CardBack small glow/>
+                            <span style={{color:"#e8d050",fontSize:8,background:"rgba(0,0,0,.6)",borderRadius:4,padding:"1px 5px",whiteSpace:"nowrap",fontWeight:700}}>tap</span>
+                          </div>
+                        :tByP[players[viewAs]?.id]
+                          ?<CardFace card={tByP[players[viewAs].id]} small highlight={pendingTrick?.winnerId===players[viewAs]?.id} disabled/>
+                          :<div style={{width:44,height:62,border:isMyTurn?"2px dashed rgba(100,220,100,.5)":"1px dashed rgba(255,255,255,.15)",borderRadius:7,background:isMyTurn?"rgba(80,200,80,.06)":"transparent"}}/>}
+                    </div>
+                    {pendingTrick&&<div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",color:"#50e050",fontSize:10,fontWeight:700,background:"rgba(0,0,0,.75)",borderRadius:8,padding:"2px 8px",whiteSpace:"nowrap",pointerEvents:"none"}}>🏆 {pendingTrick.winnerName}</div>}
+                    {isMyTurn&&!staged&&!Object.keys(tByP).length&&<div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",color:"rgba(255,255,255,.2)",fontSize:10,textAlign:"center",pointerEvents:"none"}}>tap card</div>}
                   </div>
-                  <button onClick={humanSetTrump} style={{background:"linear-gradient(135deg,#2a5e2a,#48904a)",border:"none",borderRadius:9,padding:"8px 24px",color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"Georgia,serif",fontSize:14}}>Set {tPick.charAt(0).toUpperCase()+tPick.slice(1)}</button>
+                </div>
+
+                <div style={{flexShrink:0}}>
+                  <MobileChip player={players[rightIdx]} bid={bids[players[rightIdx]?.id]} made={made[players[rightIdx]?.id]||0}
+                    isDealer={dealer===rightIdx} isTurn={isTurn(rightIdx)}
+                    teamCol={tc(tOf(rightIdx))} cardCount={gs.hands[players[rightIdx]?.id]?.length||0}/>
                 </div>
               </div>
-            )}
-            {!pendingTrick&&phase==="BIDDING_OTHERS"&&players[currentBidder]?.id===players[viewAs]?.id&&(
-              <div style={{display:"flex",justifyContent:"center",marginBottom:6}}>
-                <BidPanel min={0} max={rule.cards} isInitial={false} onBid={humanBidOther}/>
-              </div>
-            )}
-            {/* Hand + my panel side by side */}
-            <div style={{display:"flex",alignItems:"flex-end",gap:12}}>
-              <div style={{flex:1}}>
+
+              {/* Bid panel — full width, compact */}
+              {!pendingTrick&&phase==="BIDDING_INITIAL"&&players[currentBidder]?.id===players[viewAs]?.id&&(
+                <div style={{flexShrink:0}}><BidPanel min={Math.max(rule.minBid,(highBid||0)+1)} max={rule.cards} isInitial onBid={humanBid}/></div>
+              )}
+              {!pendingTrick&&phase==="SET_TRUMP"&&players[highBidder]?.id===players[viewAs]?.id&&(
+                <div style={{flexShrink:0,background:"rgba(255,255,255,.95)",border:"2px solid #c8b880",borderRadius:12,padding:"10px 14px",textAlign:"center"}}>
+                  <div style={{color:"#4a3810",fontSize:10,letterSpacing:1,marginBottom:8,fontWeight:700}}>CHOOSE TRUMP — or call High Card</div>
+                  <div style={{display:"flex",gap:8,justifyContent:"center",marginBottom:10,flexWrap:"wrap"}}>
+                    {SUITS.map(s=><button key={s} onClick={()=>setTP(s)} style={{background:tPick===s?"#fff":"rgba(255,255,255,.5)",border:tPick===s?`2px solid ${SCLR[s]}`:"2px solid #ddd",borderRadius:8,padding:"6px 12px",cursor:"pointer",color:SCLR[s],fontSize:24,transition:"all .12s"}}>{SYM[s]}</button>)}
+                    <button onClick={()=>setTP("none")} style={{background:tPick==="none"?"#fff4e0":"rgba(255,255,255,.5)",border:tPick==="none"?"2px solid #c08020":"2px solid #ddd",borderRadius:8,padding:"6px 10px",cursor:"pointer",color:tPick==="none"?"#8a5010":"#888",fontSize:12,fontWeight:700,transition:"all .12s"}}>🃏 High Card</button>
+                  </div>
+                  <button onClick={humanSetTrump} style={{background:"linear-gradient(135deg,#2a5e2a,#48904a)",border:"none",borderRadius:8,padding:"7px 20px",color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"Georgia,serif",fontSize:13}}>{tPick==="none"?"Call High Card":"Set "+tPick.charAt(0).toUpperCase()+tPick.slice(1)}</button>
+                </div>
+              )}
+              {!pendingTrick&&phase==="BIDDING_OTHERS"&&players[currentBidder]?.id===players[viewAs]?.id&&(
+                <div style={{flexShrink:0}}><BidPanel min={0} max={rule.cards} isInitial={false} onBid={humanBidOther}/></div>
+              )}
+
+              {/* My hand — full width */}
+              <div style={{flexShrink:0}}>
                 <ArcHand cards={myHand} onReorder={reorder} canDrag={isMyTurn} stagedId={staged?.id}/>
               </div>
-              <div style={{flexShrink:0,paddingBottom:8}}>
-                <PlayerPanel position="side"
-                  player={players[viewAs]} bid={bids[players[viewAs]?.id]} made={made[players[viewAs]?.id]||0}
-                  isDealer={dealer===viewAs} isTurn={isTurn(viewAs)}
-                  score={scores[players[viewAs]?.id]||0} teamCol={tc(tOf(viewAs))}
-                  cardCount={myHand.length}/>
+            </>
+          ):(
+            /* ══ DESKTOP LAYOUT ══ */
+            <>
+              {/* ── TOP: Partner panel ── */}
+              <div style={{display:"flex",justifyContent:"center",flexShrink:0}}>
+                <PlayerPanel position="top"
+                  player={players[partIdx]} bid={bids[players[partIdx]?.id]} made={made[players[partIdx]?.id]||0}
+                  isDealer={dealer===partIdx} isTurn={isTurn(partIdx)}
+                  score={scores[players[partIdx]?.id]||0} teamCol={tc(tOf(partIdx))}
+                  cardCount={gs.hands[players[partIdx]?.id]?.length||0}
+                  isCaller={highBidder===partIdx&&!!trumpSuit} trumpSuit={trumpSuit}/>
               </div>
-            </div>
-          </div>
+
+              {/* ── MIDDLE ROW ── */}
+              <div style={{flex:1,display:"flex",alignItems:"center",gap:12,minHeight:0}}>
+                <div style={{flexShrink:0,alignSelf:"center"}}>
+                  <PlayerPanel position="side"
+                    player={players[leftIdx]} bid={bids[players[leftIdx]?.id]} made={made[players[leftIdx]?.id]||0}
+                    isDealer={dealer===leftIdx} isTurn={isTurn(leftIdx)}
+                    score={scores[players[leftIdx]?.id]||0} teamCol={tc(tOf(leftIdx))}
+                    cardCount={gs.hands[players[leftIdx]?.id]?.length||0}
+                    isCaller={highBidder===leftIdx&&!!trumpSuit} trumpSuit={trumpSuit}/>
+                </div>
+                <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:6,minWidth:0}}>
+                  <div onDragOver={e=>{e.preventDefault();setGlow(true);}}
+                    onDrop={e=>{e.preventDefault();setGlow(false);const src=e.dataTransfer.getData("source"),idx=parseInt(e.dataTransfer.getData("cardIndex"));if(src==="hand"&&!isNaN(idx)&&isMyTurn)stageCard(myHand[idx]);}}
+                    onDragLeave={()=>setGlow(false)}
+                    style={{position:"relative",width:260,height:220,
+                      background:glow?"rgba(80,200,80,.07)":"rgba(0,0,0,.18)",
+                      border:glow?"2px dashed rgba(80,200,80,.6)":isMyTurn?"2px dashed rgba(255,255,255,.22)":"1px solid rgba(255,255,255,.08)",
+                      borderRadius:24,flexShrink:0,transition:"all .15s",
+                      boxShadow:"inset 0 2px 16px rgba(0,0,0,.2)"}}>
+                    <div style={{position:"absolute",top:10,left:"50%",transform:"translateX(-50%)"}}>
+                      {tByP[players[partIdx]?.id]?<CardFace card={tByP[players[partIdx].id]} small highlight={pendingTrick?.winnerId===players[partIdx]?.id} disabled/>:<div style={{width:54,height:78,border:"1px dashed rgba(255,255,255,.15)",borderRadius:9}}/>}
+                    </div>
+                    <div style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)"}}>
+                      {tByP[players[leftIdx]?.id]?<CardFace card={tByP[players[leftIdx].id]} small highlight={pendingTrick?.winnerId===players[leftIdx]?.id} disabled/>:<div style={{width:54,height:78,border:"1px dashed rgba(255,255,255,.15)",borderRadius:9}}/>}
+                    </div>
+                    <div style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)"}}>
+                      {tByP[players[rightIdx]?.id]?<CardFace card={tByP[players[rightIdx].id]} small highlight={pendingTrick?.winnerId===players[rightIdx]?.id} disabled/>:<div style={{width:54,height:78,border:"1px dashed rgba(255,255,255,.15)",borderRadius:9}}/>}
+                    </div>
+                    <div style={{position:"absolute",bottom:10,left:"50%",transform:"translateX(-50%)"}}>
+                      {staged&&!tByP[players[viewAs]?.id]?<div onClick={reveal} style={{cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3}}><CardBack small glow/><span style={{color:"#e8d050",fontSize:9,background:"rgba(0,0,0,.6)",borderRadius:4,padding:"2px 6px",whiteSpace:"nowrap",fontWeight:700}}>tap to reveal</span></div>:tByP[players[viewAs]?.id]?<div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:3}}><CardFace card={tByP[players[viewAs].id]} small highlight={pendingTrick?.winnerId===players[viewAs]?.id} disabled/>{pendingTrick?.winnerId===players[viewAs]?.id&&<span style={{color:"#28c028",fontSize:9,background:"rgba(255,255,255,.9)",borderRadius:4,padding:"2px 6px",fontWeight:700}}>✓ you win!</span>}</div>:<div style={{width:54,height:78,border:isMyTurn?"2px dashed rgba(100,220,100,.5)":"1px dashed rgba(255,255,255,.15)",borderRadius:9,background:isMyTurn?"rgba(80,200,80,.06)":"transparent",transition:"all .15s"}}/>}
+                    </div>
+                    {pendingTrick&&<div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",color:"#50e050",fontSize:12,fontWeight:700,background:"rgba(0,0,0,.7)",borderRadius:10,padding:"3px 12px",whiteSpace:"nowrap",pointerEvents:"none",border:"1px solid rgba(80,224,80,.3)"}}>🏆 {pendingTrick.winnerName}</div>}
+                    {isMyTurn&&!staged&&!Object.keys(tByP).length&&<div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",color:"rgba(255,255,255,.18)",fontSize:12,textAlign:"center",pointerEvents:"none",lineHeight:1.6}}>drag a card here</div>}
+                  </div>
+                </div>
+                <div style={{flexShrink:0,alignSelf:"center"}}>
+                  <PlayerPanel position="side"
+                    player={players[rightIdx]} bid={bids[players[rightIdx]?.id]} made={made[players[rightIdx]?.id]||0}
+                    isDealer={dealer===rightIdx} isTurn={isTurn(rightIdx)}
+                    score={scores[players[rightIdx]?.id]||0} teamCol={tc(tOf(rightIdx))}
+                    cardCount={gs.hands[players[rightIdx]?.id]?.length||0}
+                    isCaller={highBidder===rightIdx&&!!trumpSuit} trumpSuit={trumpSuit}/>
+                </div>
+              </div>
+
+              {/* ── BOTTOM ── */}
+              <div style={{flexShrink:0,paddingBottom:4,position:"relative"}}>
+                {!pendingTrick&&phase==="BIDDING_INITIAL"&&players[currentBidder]?.id===players[viewAs]?.id&&(
+                  <div style={{display:"flex",justifyContent:"center",marginBottom:6}}><BidPanel min={Math.max(rule.minBid,(highBid||0)+1)} max={rule.cards} isInitial onBid={humanBid}/></div>
+                )}
+                {!pendingTrick&&phase==="SET_TRUMP"&&players[highBidder]?.id===players[viewAs]?.id&&(
+                  <div style={{display:"flex",justifyContent:"center",marginBottom:6}}>
+                    <div style={{background:"rgba(255,255,255,.95)",border:"2px solid #c8b880",borderRadius:14,padding:"12px 20px",textAlign:"center",boxShadow:"0 8px 24px rgba(0,0,0,.3)"}}>
+                      <div style={{color:"#4a3810",fontSize:11,letterSpacing:1,marginBottom:10,fontWeight:700}}>CHOOSE TRUMP SUIT — or call High Card</div>
+                      <div style={{display:"flex",gap:10,justifyContent:"center",marginBottom:12,flexWrap:"wrap"}}>
+                        {SUITS.map(s=><button key={s} onClick={()=>setTP(s)} style={{background:tPick===s?"#fff":"rgba(255,255,255,.5)",border:tPick===s?`2.5px solid ${SCLR[s]}`:"2px solid #ddd",borderRadius:10,padding:"8px 16px",cursor:"pointer",color:SCLR[s],fontSize:28,transition:"all .12s",boxShadow:tPick===s?`0 2px 10px ${SCLR[s]}44`:"none"}}>{SYM[s]}</button>)}
+                        <button onClick={()=>setTP("none")} style={{background:tPick==="none"?"#fff4e0":"rgba(255,255,255,.5)",border:tPick==="none"?"2.5px solid #c08020":"2px solid #ddd",borderRadius:10,padding:"8px 14px",cursor:"pointer",color:tPick==="none"?"#8a5010":"#888",fontSize:14,fontWeight:700,transition:"all .12s",boxShadow:tPick==="none"?"0 2px 10px rgba(200,128,32,.3)":"none"}}>🃏 High Card</button>
+                      </div>
+                      <button onClick={humanSetTrump} style={{background:"linear-gradient(135deg,#2a5e2a,#48904a)",border:"none",borderRadius:9,padding:"8px 24px",color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"Georgia,serif",fontSize:14}}>{tPick==="none"?"Call High Card":"Set "+tPick.charAt(0).toUpperCase()+tPick.slice(1)}</button>
+                    </div>
+                  </div>
+                )}
+                {!pendingTrick&&phase==="BIDDING_OTHERS"&&players[currentBidder]?.id===players[viewAs]?.id&&(
+                  <div style={{display:"flex",justifyContent:"center",marginBottom:6}}><BidPanel min={0} max={rule.cards} isInitial={false} onBid={humanBidOther}/></div>
+                )}
+                <div style={{display:"flex",alignItems:"flex-end",gap:12}}>
+                  <div style={{flex:1}}><ArcHand cards={myHand} onReorder={reorder} canDrag={isMyTurn} stagedId={staged?.id}/></div>
+                  <div style={{flexShrink:0,paddingBottom:8}}>
+                    <PlayerPanel position="side"
+                      player={players[viewAs]} bid={bids[players[viewAs]?.id]} made={made[players[viewAs]?.id]||0}
+                      isDealer={dealer===viewAs} isTurn={isTurn(viewAs)}
+                      score={scores[players[viewAs]?.id]||0} teamCol={tc(tOf(viewAs))}
+                      cardCount={myHand.length}
+                      isCaller={highBidder===viewAs&&!!trumpSuit} trumpSuit={trumpSuit}/>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
 
         </div>
       </div>
@@ -1468,19 +1596,19 @@ function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,di
       })()}
 
       {/* ── BOTTOM-LEFT HUD: status prompt + discard/undo/unstage ── */}
-      <div style={{position:"absolute",bottom:20,left:20,zIndex:40,display:"flex",flexDirection:"column",gap:8,alignItems:"flex-start",maxWidth:320}}>
-        <div style={{background:"rgba(0,0,0,.72)",backdropFilter:"blur(6px)",borderRadius:12,padding:"8px 16px",
+      <div style={{position:"absolute",bottom:isMobile?undefined:20,top:isMobile?56:undefined,left:isMobile?8:20,zIndex:40,display:"flex",flexDirection:"column",gap:6,alignItems:"flex-start",maxWidth:isMobile?200:320}}>
+        <div style={{background:"rgba(0,0,0,.72)",backdropFilter:"blur(6px)",borderRadius:10,padding:isMobile?"5px 10px":"8px 16px",
           border:`1px solid ${pendingTrick?"rgba(80,224,80,.35)":isMyTurn?"rgba(240,224,80,.35)":"rgba(255,255,255,.1)"}`,
           color:pendingTrick?"#60e060":isMyTurn?"#f0e060":"rgba(255,255,255,.75)",
-          fontSize:13,fontWeight:600,lineHeight:1.4,pointerEvents:"none"}}>
+          fontSize:isMobile?10:13,fontWeight:600,lineHeight:1.4,pointerEvents:"none"}}>
           {status}
         </div>
         {(pendingTrick||lastDiscard||staged)&&(
           <div style={{display:"flex",gap:8}}>
             {pendingTrick&&(
-              <button onClick={discard} style={{background:"linear-gradient(135deg,#28a028,#40c040)",border:"none",borderRadius:10,
-                padding:"9px 22px",color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"Georgia,serif",fontSize:13,
-                boxShadow:"0 4px 14px rgba(0,0,0,.4)"}}>✓ Discard Trick</button>
+              <button onClick={discard} style={{background:"linear-gradient(135deg,#28a028,#40c040)",border:"none",borderRadius:9,
+                padding:isMobile?"7px 14px":"9px 22px",color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"Georgia,serif",fontSize:isMobile?11:13,
+                boxShadow:"0 4px 14px rgba(0,0,0,.4)"}}>✓ Discard</button>
             )}
             {pendingTrick&&lastDiscard&&(
               <button onClick={undo} style={{background:"rgba(255,255,255,.9)",border:"2px solid #c8a030",borderRadius:10,
