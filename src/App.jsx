@@ -1403,11 +1403,12 @@ function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,di
                   <div onDragOver={e=>{e.preventDefault();setGlow(true);}}
                     onDrop={e=>{e.preventDefault();setGlow(false);const src=e.dataTransfer.getData("source"),idx=parseInt(e.dataTransfer.getData("cardIndex"));if(src==="hand"&&!isNaN(idx)&&isMyTurn)stageCard(myHand[idx]);}}
                     onDragLeave={()=>setGlow(false)}
+                    onClick={()=>{if(pendingTrick)discard();}}
                     style={{position:"relative",width:"100%",maxWidth:200,aspectRatio:"1/0.85",
                       background:glow?"rgba(80,200,80,.07)":"rgba(0,0,0,.18)",
                       border:glow?"2px dashed rgba(80,200,80,.6)":isMyTurn?"2px dashed rgba(255,255,255,.22)":"1px solid rgba(255,255,255,.08)",
-                      borderRadius:16,transition:"all .15s",boxShadow:"inset 0 2px 12px rgba(0,0,0,.2)"}}>
-                    {/* Partner top */}
+                      borderRadius:16,transition:"all .15s",boxShadow:"inset 0 2px 12px rgba(0,0,0,.2)",
+                      cursor:pendingTrick?"pointer":"default"}}>
                     <div style={{position:"absolute",top:6,left:"50%",transform:"translateX(-50%)"}}>
                       {tByP[players[partIdx]?.id]?<CardFace card={tByP[players[partIdx].id]} small highlight={pendingTrick?.winnerId===players[partIdx]?.id} disabled/>:<div style={{width:44,height:62,border:"1px dashed rgba(255,255,255,.15)",borderRadius:7}}/>}
                     </div>
@@ -1492,11 +1493,13 @@ function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,di
                   <div onDragOver={e=>{e.preventDefault();setGlow(true);}}
                     onDrop={e=>{e.preventDefault();setGlow(false);const src=e.dataTransfer.getData("source"),idx=parseInt(e.dataTransfer.getData("cardIndex"));if(src==="hand"&&!isNaN(idx)&&isMyTurn)stageCard(myHand[idx]);}}
                     onDragLeave={()=>setGlow(false)}
+                    onClick={()=>{if(pendingTrick)discard();}}
                     style={{position:"relative",width:260,height:220,
                       background:glow?"rgba(80,200,80,.07)":"rgba(0,0,0,.18)",
                       border:glow?"2px dashed rgba(80,200,80,.6)":isMyTurn?"2px dashed rgba(255,255,255,.22)":"1px solid rgba(255,255,255,.08)",
                       borderRadius:24,flexShrink:0,transition:"all .15s",
-                      boxShadow:"inset 0 2px 16px rgba(0,0,0,.2)"}}>
+                      boxShadow:"inset 0 2px 16px rgba(0,0,0,.2)",
+                      cursor:pendingTrick?"pointer":"default"}}>
                     <div style={{position:"absolute",top:10,left:"50%",transform:"translateX(-50%)"}}>
                       {tByP[players[partIdx]?.id]?<CardFace card={tByP[players[partIdx].id]} small highlight={pendingTrick?.winnerId===players[partIdx]?.id} disabled/>:<div style={{width:54,height:78,border:"1px dashed rgba(255,255,255,.15)",borderRadius:9}}/>}
                     </div>
