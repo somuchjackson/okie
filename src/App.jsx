@@ -1074,7 +1074,7 @@ function LobbyPage({gameId,roomCode,seats,currentUserId,onGameStart,tNames,onBac
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN GAME BOARD
 // ─────────────────────────────────────────────────────────────────────────────
-function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,disconnected={},seats=[],onReplaceWithBot,onGameEnd}){
+function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,disconnected={},seats=[],onReplaceWithBot,onGameEnd,isGuest,onSignUp}){
   const[staged,setStaged]=useState(null);
   const[glow,setGlow]=useState(false);
   const[log,setLog]=useState([]);
@@ -1294,6 +1294,12 @@ function GameBoard({gs,setGs,mySeatIdx,myPlayerId,gameId,tNames,isMultiplayer,di
               </div>
             ))}
           </div>
+          {isGuest&&(
+            <div style={{background:"#f0f7ff",border:"1.5px solid #a0c0e0",borderRadius:10,padding:"12px 16px",marginBottom:16,textAlign:"center"}}>
+              <div style={{fontSize:13,color:"#2a4a6a",marginBottom:8}}>Want your stats to count? Create a free account.</div>
+              <button onClick={onSignUp} style={{background:"linear-gradient(135deg,#1a4a7a,#2a7ab0)",border:"none",borderRadius:8,padding:"8px 20px",color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"Georgia,serif",fontSize:13}}>Create Account →</button>
+            </div>
+          )}
           <button onClick={onGameEnd} style={{width:"100%",background:"linear-gradient(135deg,#2a5e2a,#48904a)",border:"none",borderRadius:10,padding:"12px",color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"Georgia,serif",fontSize:15}}>Return to Menu</button>
         </div>
       </div>
@@ -1659,6 +1665,8 @@ export default function OkieApp(){
   });
   const screenRef=useRef("auth");
   const[user,setUser]=useState(null);
+  const[isGuest,setIsGuest]=useState(false);
+  const[guestName,setGuestName]=useState("");
   const[authMode,setAuthMode]=useState("login");// login | signup
   const[authUser,setAuthU]=useState("");
   const[authEmail,setAuthE]=useState("");
@@ -1795,7 +1803,7 @@ export default function OkieApp(){
     ];
     const gs=initHand({players,dealer:0,handIndex:0,scores:{p0:0,p1:0,p2:0,p3:0},handScoreLog:[]});
     let gameRecord=null;
-    if(user?.id&&sbReady){
+    if(user?.id&&!isGuest&&sbReady){
       try{
         gameRecord=await sbCreateBotGame(user.id,names[0],names,tNames);
       }catch(e){ console.warn("Could not create bot game record:",e.message); }
@@ -1815,7 +1823,10 @@ export default function OkieApp(){
   }
 
   async function doJoinGame(){
-    if(!user||!sbReady){alert("Please log in first");return;}
+    const displayName=isGuest?(guestName.trim()||"Guest"):user?.username;
+    const playerId=isGuest?`guest-${Date.now()}-${Math.random().toString(36).slice(2,7)}`:user?.id;
+    if(!playerId){alert("Please log in or continue as guest first");return;}
+    if(!sbReady){alert("Not connected yet, please wait");return;}
     try{
       const g=await sbGetGame(joinCode);
       if(!g){alert("Game not found");return;}
@@ -1823,8 +1834,12 @@ export default function OkieApp(){
       const taken=seats.map(s=>s.seat_index);
       const open=[0,1,2,3].find(i=>!taken.includes(i));
       if(open===undefined){alert("Game is full");return;}
-      await sbJoinSeat(g.id,open,user.id,user.username);
+      await sbJoinSeat(g.id,open,playerId,displayName);
       const fresh=await sbGetGame(joinCode);
+      // For guests: store a temporary user object so the game works
+      if(isGuest&&!user){
+        setUser({id:playerId,username:displayName,isGuest:true});
+      }
       setGD({game:fresh,seats:fresh.game_seats,isMultiplayer:true});
       navTo("lobby");
     }catch(e){ alert("Error joining: "+e.message); }
@@ -1923,6 +1938,22 @@ export default function OkieApp(){
           {!sbReady?"Connecting…":authLoading?"…":authMode==="login"?"Sign In":"Create Account"}
         </button>
         {!sbReady&&<div style={{color:"#aaa",fontSize:11,textAlign:"center",marginTop:8}}>Loading connection…</div>}
+        {/* ── Guest option ── */}
+        <div style={{marginTop:20,borderTop:"1px solid #e8e0d0",paddingTop:16}}>
+          <div style={{color:"#888",fontSize:11,textAlign:"center",marginBottom:10,letterSpacing:.5}}>
+            Having trouble? Play without an account.
+          </div>
+          <input value={guestName} onChange={e=>setGuestName(e.target.value)} placeholder="Enter a display name"
+            style={{width:"100%",boxSizing:"border-box",background:"#fff",border:"2px solid #ddd",borderRadius:8,padding:"9px 14px",color:"#111",fontFamily:"Georgia,serif",fontSize:14,outline:"none",marginBottom:8}}/>
+          <button onClick={()=>{
+            const name=guestName.trim()||"Guest";
+            setIsGuest(true);
+            setUser({id:`guest-${Date.now()}`,username:name,isGuest:true});
+            navTo("menu");
+          }} style={{width:"100%",background:"#fff",border:"2px solid #c8b880",borderRadius:10,padding:"11px",color:"#5a4a2a",fontWeight:700,cursor:"pointer",fontFamily:"Georgia,serif",fontSize:14}}>
+            Continue as Guest →
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -1936,18 +1967,24 @@ export default function OkieApp(){
           <div style={{fontSize:44,fontWeight:700,letterSpacing:5,lineHeight:1}}>OKIE</div>
           <div style={{color:"#6a5a3a",fontSize:11,letterSpacing:3}}>Welcome, {user?.first_name||user?.username}</div>
         </div>
+        {isGuest&&(
+          <div style={{background:"#fff8f0",border:"1.5px solid #f0c080",borderRadius:10,padding:"10px 14px",marginBottom:16,fontSize:12,color:"#8a5010",textAlign:"center"}}>
+            👤 Playing as guest — stats won't be saved.{" "}
+            <span style={{textDecoration:"underline",cursor:"pointer",fontWeight:700}} onClick={()=>{setIsGuest(false);setUser(null);navTo("auth");}}>Sign up for an account</span>
+          </div>
+        )}
         <div style={{display:"flex",flexDirection:"column",gap:10}}>
-          <button onClick={()=>navTo("create")} style={Sb.menuBtn("#2a5e2a","#48904a")}>🃏  Create Game (Multiplayer)</button>
+          {!isGuest&&<button onClick={()=>navTo("create")} style={Sb.menuBtn("#2a5e2a","#48904a")}>🃏  Create Game (Multiplayer)</button>}
           <button onClick={()=>navTo("join")} style={Sb.menuBtn("#1a4a7a","#2a7ab0")}>🔗  Join Game by Code</button>
           <button onClick={()=>navTo("solo")} style={Sb.menuBtn("#4a3a1a","#7a6a3a")}>🤖  Solo vs Bots</button>
-          <button onClick={()=>navTo("stats")} style={Sb.menuBtn("#3a1a4a","#6a3a7a")}>📊  Leaderboard & Stats</button>
-          <button onClick={()=>navTo("members")} style={Sb.menuBtn("#1a3a4a","#2a6a7a")}>👥  Members</button>
-          <button onClick={()=>navTo("profile")} style={{...Sb.menuBtn("#3a2a1a","#6a4a2a"),display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          {!isGuest&&<button onClick={()=>navTo("stats")} style={Sb.menuBtn("#3a1a4a","#6a3a7a")}>📊  Leaderboard & Stats</button>}
+          {!isGuest&&<button onClick={()=>navTo("members")} style={Sb.menuBtn("#1a3a4a","#2a6a7a")}>👥  Members</button>}
+          {!isGuest&&<button onClick={()=>navTo("profile")} style={{...Sb.menuBtn("#3a2a1a","#6a4a2a"),display:"flex",alignItems:"center",justifyContent:"space-between"}}>
             <span>⚙️  My Profile</span>
             {(!user?.first_name||!user?.last_name||!user?.grad_year)&&<span style={{background:"#e07020",borderRadius:10,padding:"2px 8px",fontSize:10,fontWeight:700}}>Incomplete</span>}
-          </button>
+          </button>}
         </div>
-        <button onClick={()=>{sbSignOut();setUser(null);navTo("auth");}} style={{width:"100%",marginTop:16,background:"none",border:"1.5px solid #ddd",borderRadius:10,padding:"9px",color:"#999",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:13}}>Sign Out</button>
+        <button onClick={()=>{if(isGuest){setIsGuest(false);setUser(null);}else sbSignOut().then(()=>{});setUser(null);navTo("auth");}} style={{width:"100%",marginTop:16,background:"none",border:"1.5px solid #ddd",borderRadius:10,padding:"9px",color:"#999",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:13}}>{isGuest?"← Back to Login":"Sign Out"}</button>
       </div>
     </div>
   );
@@ -2015,6 +2052,13 @@ export default function OkieApp(){
           <input value={joinCode} onChange={e=>setJC(e.target.value.toUpperCase())} onKeyDown={e=>e.key==="Enter"&&doJoinGame()} placeholder="ABC123"
             style={{width:"100%",boxSizing:"border-box",background:"#fff",border:"2px solid #c8b880",borderRadius:8,padding:"10px 14px",fontFamily:"monospace",fontSize:22,outline:"none",letterSpacing:6,textAlign:"center"}}/>
         </div>
+        {isGuest&&(
+          <div style={{marginBottom:20}}>
+            <div style={{color:"#5a4a2a",fontSize:11,letterSpacing:1,marginBottom:6,fontWeight:700}}>YOUR NAME</div>
+            <input value={guestName} onChange={e=>setGuestName(e.target.value)} placeholder="What should we call you?"
+              style={{width:"100%",boxSizing:"border-box",background:"#fff",border:"2px solid #c8b880",borderRadius:8,padding:"10px 14px",color:"#111",fontFamily:"Georgia,serif",fontSize:14,outline:"none"}}/>
+          </div>
+        )}
         <button onClick={doJoinGame} style={{width:"100%",background:"linear-gradient(135deg,#2a5e2a,#48904a)",border:"none",borderRadius:10,padding:"13px",color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"Georgia,serif",fontSize:16}}>Join →</button>
       </div>
     </div>
@@ -2032,6 +2076,8 @@ export default function OkieApp(){
     <GameBoard gs={myGs} setGs={setMyGs} mySeatIdx={mySeatIdx} myPlayerId={user?.id}
       gameId={gameData?.game?.id} tNames={tNames} isMultiplayer={gameData?.isMultiplayer}
       disconnected={disconnected} seats={gameData?.seats||[]}
+      isGuest={isGuest}
+      onSignUp={()=>{setIsGuest(false);setUser(null);navTo("auth");}}
       onReplaceWithBot={(playerId,seatIdx)=>{
         setMyGs(g=>{
           if(!g)return g;
